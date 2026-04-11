@@ -10,7 +10,6 @@ This support goes to **DexyFex**, the original creator of **CodeWalker**.
 Without CodeWalker and its source foundation, this tool would not exist in its current form.
 
 - Patreon: https://www.patreon.com/dexyfex
-- PayPal Donate: https://www.paypal.com/donate/?hosted_button_id=F4NHHR9XUGYR
 
 **Base source:** DexyFex / CodeWalker  
 **Workflow and support:** Codex

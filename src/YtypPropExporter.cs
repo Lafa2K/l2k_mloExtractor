@@ -29,6 +29,9 @@ namespace CodeWalker.Tools
         public int MissingTextures { get; set; }
         public int MissingArchetypes { get; set; }
         public int MissingResources { get; set; }
+        public List<string> MissingTextureNames { get; } = new List<string>();
+        public List<string> MissingArchetypeNames { get; } = new List<string>();
+        public List<string> MissingResourceNames { get; } = new List<string>();
         public List<string> Errors { get; } = new List<string>();
     }
 
@@ -52,6 +55,7 @@ namespace CodeWalker.Tools
     public sealed class YtypPropExportSelection
     {
         public bool ImportAllMlo { get; set; } = true;
+        public string PreferredRpfName { get; set; }
         public HashSet<string> RoomKeys { get; } = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
         public HashSet<string> EntitySetKeys { get; } = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
     }
@@ -66,6 +70,12 @@ namespace CodeWalker.Tools
         private Dictionary<ulong, Texture> textureLookupCache;
         private Dictionary<uint, YtdFile> ytdFileCache;
         private HashSet<uint> missingYtdHashes;
+        private string preferredRpfFilter;
+        private List<RpfFile> preferredRpfs;
+        private HashSet<string> preferredRpfPaths;
+        private Dictionary<uint, Archetype> preferredArchetypeLookup;
+        private Dictionary<uint, Archetype> noModArchetypeLookup;
+        private HashSet<uint> missingNoModArchetypeHashes;
 
         private sealed class ExportTarget
         {
@@ -220,6 +230,8 @@ namespace CodeWalker.Tools
             {
                 throw new Exception("Game file cache isn't ready yet. Please wait for the GTA files to finish loading and try again.");
             }
+
+            ConfigurePreferredRpfScope(fileCache, selection?.PreferredRpfName);
 
             ReportProgress(status, progress, "Loading YTYP...");
             var ytyp = LoadYtypForExport(inputPath);
@@ -454,6 +466,469 @@ namespace CodeWalker.Tools
             return lookup;
         }
 
+        private bool HasPreferredRpfScope => !string.IsNullOrWhiteSpace(preferredRpfFilter);
+
+        private void ConfigurePreferredRpfScope(GameFileCache fileCache, string preferredRpfName)
+        {
+            preferredRpfFilter = NormalizeScopeValue(preferredRpfName);
+            preferredRpfs = null;
+            preferredRpfPaths = null;
+            preferredArchetypeLookup = null;
+            noModArchetypeLookup = new Dictionary<uint, Archetype>();
+            missingNoModArchetypeHashes = new HashSet<uint>();
+
+            if (!HasPreferredRpfScope || (fileCache?.RpfMan == null))
+            {
+                preferredRpfFilter = null;
+                return;
+            }
+
+            preferredRpfs = FindPreferredRpfs(fileCache, preferredRpfFilter);
+            preferredRpfPaths = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+            foreach (var rpf in preferredRpfs)
+            {
+                AddNormalizedScopeValue(preferredRpfPaths, rpf?.Name);
+                AddNormalizedScopeValue(preferredRpfPaths, rpf?.Path);
+                AddNormalizedScopeValue(preferredRpfPaths, rpf?.FilePath);
+
+                var topRpf = rpf?.GetTopParent();
+                AddNormalizedScopeValue(preferredRpfPaths, topRpf?.Name);
+                AddNormalizedScopeValue(preferredRpfPaths, topRpf?.Path);
+                AddNormalizedScopeValue(preferredRpfPaths, topRpf?.FilePath);
+            }
+        }
+
+        private List<RpfFile> FindPreferredRpfs(GameFileCache fileCache, string filter)
+        {
+            var matches = new List<RpfFile>();
+            var seen = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+            var rpfs = fileCache?.RpfMan?.ModRpfs;
+            if (rpfs == null)
+            {
+                return matches;
+            }
+
+            foreach (var rpf in rpfs)
+            {
+                if (rpf == null)
+                {
+                    continue;
+                }
+
+                if (!DoesRpfMatchPreferredFilter(rpf, filter))
+                {
+                    continue;
+                }
+
+                var key = NormalizeScopeValue(rpf.Path) ?? NormalizeScopeValue(rpf.FilePath) ?? NormalizeScopeValue(rpf.Name) ?? string.Empty;
+                if (seen.Add(key))
+                {
+                    matches.Add(rpf);
+                }
+            }
+
+            return matches;
+        }
+
+        private bool DoesRpfMatchPreferredFilter(RpfFile rpf, string filter)
+        {
+            if ((rpf == null) || string.IsNullOrWhiteSpace(filter))
+            {
+                return false;
+            }
+
+            if (DoesPathMatchPreferredFilter(rpf.Name, filter) || DoesPathMatchPreferredFilter(rpf.Path, filter) || DoesPathMatchPreferredFilter(rpf.FilePath, filter))
+            {
+                return true;
+            }
+
+            var topRpf = rpf.GetTopParent();
+            if (topRpf == null)
+            {
+                return false;
+            }
+
+            return DoesPathMatchPreferredFilter(topRpf.Name, filter)
+                || DoesPathMatchPreferredFilter(topRpf.Path, filter)
+                || DoesPathMatchPreferredFilter(topRpf.FilePath, filter);
+        }
+
+        private bool DoesPathMatchPreferredFilter(string value, string filter)
+        {
+            var normalizedValue = NormalizeScopeValue(value);
+            if (string.IsNullOrWhiteSpace(normalizedValue) || string.IsNullOrWhiteSpace(filter))
+            {
+                return false;
+            }
+
+            if (normalizedValue.Equals(filter, StringComparison.InvariantCultureIgnoreCase)
+                || normalizedValue.EndsWith("\\" + filter, StringComparison.InvariantCultureIgnoreCase)
+                || normalizedValue.Contains(filter))
+            {
+                return true;
+            }
+
+            if (!filter.EndsWith(".rpf", StringComparison.InvariantCultureIgnoreCase))
+            {
+                var filterWithExtension = filter + ".rpf";
+                return normalizedValue.Equals(filterWithExtension, StringComparison.InvariantCultureIgnoreCase)
+                    || normalizedValue.EndsWith("\\" + filterWithExtension, StringComparison.InvariantCultureIgnoreCase)
+                    || normalizedValue.Contains(filterWithExtension);
+            }
+
+            return false;
+        }
+
+        private string NormalizeScopeValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            return value.Trim().Replace('/', '\\').ToLowerInvariant();
+        }
+
+        private void AddNormalizedScopeValue(HashSet<string> values, string value)
+        {
+            var normalized = NormalizeScopeValue(value);
+            if ((values != null) && !string.IsNullOrWhiteSpace(normalized))
+            {
+                values.Add(normalized);
+            }
+        }
+
+        private Archetype GetScopedArchetype(GameFileCache fileCache, uint hash)
+        {
+            if ((fileCache == null) || (hash == 0))
+            {
+                return null;
+            }
+
+            if (!HasPreferredRpfScope)
+            {
+                return fileCache.GetArchetype(hash);
+            }
+
+            EnsurePreferredArchetypeLookup(fileCache);
+            if ((preferredArchetypeLookup != null) && preferredArchetypeLookup.TryGetValue(hash, out var preferredArchetype))
+            {
+                return preferredArchetype;
+            }
+
+            var cachedArchetype = FilterArchetypeByScope(fileCache.GetArchetype(hash));
+            if (cachedArchetype != null)
+            {
+                return cachedArchetype;
+            }
+
+            return FindNoModArchetypeByHash(fileCache, hash);
+        }
+
+        private void EnsurePreferredArchetypeLookup(GameFileCache fileCache)
+        {
+            if (!HasPreferredRpfScope || (preferredArchetypeLookup != null))
+            {
+                return;
+            }
+
+            preferredArchetypeLookup = BuildArchetypeLookup(fileCache, preferredRpfs);
+        }
+
+        private Dictionary<uint, Archetype> BuildArchetypeLookup(GameFileCache fileCache, IEnumerable<RpfFile> rpfs)
+        {
+            var lookup = new Dictionary<uint, Archetype>();
+            var scanned = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+            if ((fileCache?.RpfMan == null) || (rpfs == null))
+            {
+                return lookup;
+            }
+
+            foreach (var rpf in rpfs)
+            {
+                if (rpf == null)
+                {
+                    continue;
+                }
+
+                var scanKey = NormalizeScopeValue(rpf.Path) ?? NormalizeScopeValue(rpf.FilePath) ?? string.Empty;
+                if (!scanned.Add(scanKey))
+                {
+                    continue;
+                }
+
+                var entries = rpf.AllEntries;
+                if (entries == null)
+                {
+                    continue;
+                }
+
+                foreach (var entry in entries)
+                {
+                    if (!(entry is RpfFileEntry fileEntry))
+                    {
+                        continue;
+                    }
+
+                    if (!string.Equals(Path.GetExtension(fileEntry.NameLower ?? string.Empty), ".ytyp", StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    TryAddArchetypesFromYtypEntry(fileCache, fileEntry, lookup);
+                }
+            }
+
+            return lookup;
+        }
+
+        private void TryAddArchetypesFromYtypEntry(GameFileCache fileCache, RpfFileEntry entry, Dictionary<uint, Archetype> lookup)
+        {
+            if ((fileCache?.RpfMan == null) || (entry == null) || (lookup == null))
+            {
+                return;
+            }
+
+            try
+            {
+                var ytyp = fileCache.RpfMan.GetFile<YtypFile>(entry);
+                if (ytyp?.AllArchetypes == null)
+                {
+                    return;
+                }
+
+                foreach (var archetype in ytyp.AllArchetypes)
+                {
+                    if (archetype == null)
+                    {
+                        continue;
+                    }
+
+                    uint hash = archetype.Hash;
+                    if ((hash != 0) && !lookup.ContainsKey(hash))
+                    {
+                        lookup[hash] = archetype;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private Archetype FindNoModArchetypeByHash(GameFileCache fileCache, uint hash)
+        {
+            if (!HasPreferredRpfScope || (hash == 0) || (fileCache?.RpfMan == null))
+            {
+                return null;
+            }
+
+            if ((noModArchetypeLookup != null) && noModArchetypeLookup.TryGetValue(hash, out var cachedArchetype))
+            {
+                return cachedArchetype;
+            }
+
+            if ((missingNoModArchetypeHashes != null) && missingNoModArchetypeHashes.Contains(hash))
+            {
+                return null;
+            }
+
+            var archetype = TryFindArchetypeByHash(fileCache, fileCache.RpfMan.AllNoModRpfs, hash);
+            if (archetype != null)
+            {
+                noModArchetypeLookup[hash] = archetype;
+                return archetype;
+            }
+
+            missingNoModArchetypeHashes?.Add(hash);
+            return null;
+        }
+
+        private Archetype TryFindArchetypeByHash(GameFileCache fileCache, IEnumerable<RpfFile> rpfs, uint hash)
+        {
+            if ((fileCache?.RpfMan == null) || (rpfs == null) || (hash == 0))
+            {
+                return null;
+            }
+
+            var scanned = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+            foreach (var rpf in rpfs)
+            {
+                if (rpf == null)
+                {
+                    continue;
+                }
+
+                var scanKey = NormalizeScopeValue(rpf.Path) ?? NormalizeScopeValue(rpf.FilePath) ?? string.Empty;
+                if (!scanned.Add(scanKey))
+                {
+                    continue;
+                }
+
+                var entries = rpf.AllEntries;
+                if (entries == null)
+                {
+                    continue;
+                }
+
+                foreach (var entry in entries)
+                {
+                    if (!(entry is RpfFileEntry fileEntry))
+                    {
+                        continue;
+                    }
+
+                    if (!string.Equals(Path.GetExtension(fileEntry.NameLower ?? string.Empty), ".ytyp", StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var ytyp = fileCache.RpfMan.GetFile<YtypFile>(fileEntry);
+                        var archetype = ytyp?.AllArchetypes?.FirstOrDefault(a => ((uint)(a?.Hash ?? 0)) == hash);
+                        if (archetype != null)
+                        {
+                            return archetype;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private IEnumerable<RpfFile> EnumerateScopedModRpfs(GameFileCache fileCache)
+        {
+            if (!HasPreferredRpfScope)
+            {
+                return fileCache?.RpfMan?.ModRpfs ?? Enumerable.Empty<RpfFile>();
+            }
+
+            return preferredRpfs ?? Enumerable.Empty<RpfFile>();
+        }
+
+        private Archetype FilterArchetypeByScope(Archetype archetype)
+        {
+            if ((archetype == null) || !HasPreferredRpfScope)
+            {
+                return archetype;
+            }
+
+            if (IsPreferredArchetypeSource(archetype))
+            {
+                return archetype;
+            }
+
+            return IsArchetypeFromMods(archetype) ? null : archetype;
+        }
+
+        private RpfFileEntry FilterEntryByScope(RpfFileEntry entry)
+        {
+            if ((entry == null) || !HasPreferredRpfScope)
+            {
+                return entry;
+            }
+
+            if (IsPreferredEntrySource(entry))
+            {
+                return entry;
+            }
+
+            return IsEntryFromMods(entry) ? null : entry;
+        }
+
+        private T FilterGameFileByScope<T>(T gameFile) where T : GameFile
+        {
+            if ((gameFile == null) || !HasPreferredRpfScope)
+            {
+                return gameFile;
+            }
+
+            return FilterEntryByScope(gameFile.RpfFileEntry) != null ? gameFile : null;
+        }
+
+        private bool IsPreferredEntrySource(RpfFileEntry entry)
+        {
+            return GetScopeCandidatePaths(entry).Any(IsPreferredPath);
+        }
+
+        private bool IsPreferredArchetypeSource(Archetype archetype)
+        {
+            return GetScopeCandidatePaths(archetype).Any(IsPreferredPath);
+        }
+
+        private bool IsEntryFromMods(RpfFileEntry entry)
+        {
+            return GetScopeCandidatePaths(entry).Any(IsModPath);
+        }
+
+        private bool IsArchetypeFromMods(Archetype archetype)
+        {
+            return GetScopeCandidatePaths(archetype).Any(IsModPath);
+        }
+
+        private bool IsPreferredPath(string value)
+        {
+            var normalized = NormalizeScopeValue(value);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return false;
+            }
+
+            if ((preferredRpfPaths != null) && preferredRpfPaths.Contains(normalized))
+            {
+                return true;
+            }
+
+            return DoesPathMatchPreferredFilter(normalized, preferredRpfFilter);
+        }
+
+        private bool IsModPath(string value)
+        {
+            var normalized = NormalizeScopeValue(value);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return false;
+            }
+
+            return normalized.StartsWith("mods\\", StringComparison.InvariantCultureIgnoreCase)
+                || normalized.Contains("\\mods\\");
+        }
+
+        private IEnumerable<string> GetScopeCandidatePaths(RpfFileEntry entry)
+        {
+            if (entry == null)
+            {
+                yield break;
+            }
+
+            yield return entry.Path;
+            yield return entry.File?.Path;
+            yield return entry.File?.FilePath;
+
+            var topRpf = entry.File?.GetTopParent();
+            yield return topRpf?.Path;
+            yield return topRpf?.FilePath;
+        }
+
+        private IEnumerable<string> GetScopeCandidatePaths(Archetype archetype)
+        {
+            var entry = archetype?.Ytyp?.RpfFileEntry;
+            if (entry == null)
+            {
+                yield break;
+            }
+
+            foreach (var value in GetScopeCandidatePaths(entry))
+            {
+                yield return value;
+            }
+        }
+
         private IEnumerable<MCEntityDef> GetSelectedMloEntities(MloArchetype mlo, YtypPropExportSelection selection)
         {
             var entities = mlo?.entities;
@@ -534,6 +1009,7 @@ namespace CodeWalker.Tools
                 if (archetypeHash == 0)
                 {
                     result.MissingArchetypes++;
+                    AddMissingArchetypeName(result, archetypeHash);
                     continue;
                 }
 
@@ -541,12 +1017,14 @@ namespace CodeWalker.Tools
                 if (archetype == null)
                 {
                     result.MissingArchetypes++;
+                    AddMissingArchetypeName(result, archetypeHash);
                 }
 
                 var entry = GetExportEntryForArchetype(fileCache, archetype, archetypeHash);
                 if (entry == null)
                 {
                     result.MissingResources++;
+                    AddMissingResourceName(result, archetype, archetypeHash);
                     continue;
                 }
 
@@ -579,7 +1057,71 @@ namespace CodeWalker.Tools
                 return localArchetype;
             }
 
-            return fileCache.GetArchetype(hash);
+            return GetScopedArchetype(fileCache, hash);
+        }
+
+        private void AddMissingArchetypeName(YtypPropExportResult result, uint hash)
+        {
+            if (result == null)
+            {
+                return;
+            }
+
+            result.MissingArchetypeNames.Add(GetArchetypeDebugName(hash));
+        }
+
+        private void AddMissingResourceName(YtypPropExportResult result, Archetype archetype, uint fallbackHash)
+        {
+            if (result == null)
+            {
+                return;
+            }
+
+            result.MissingResourceNames.Add(GetArchetypeDisplayName(archetype, fallbackHash));
+        }
+
+        private string GetArchetypeDisplayName(Archetype archetype, uint fallbackHash)
+        {
+            uint hash = (uint)(archetype?.Hash ?? 0);
+            if ((hash == 0) && (fallbackHash != 0))
+            {
+                hash = fallbackHash;
+            }
+
+            var name = archetype?.Name;
+            if (string.IsNullOrWhiteSpace(name) && (hash != 0))
+            {
+                var resolvedName = JenkIndex.GetString(hash);
+                if (IsResolvedJenkName(resolvedName, hash))
+                {
+                    name = resolvedName;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return (hash != 0)
+                    ? (name + " (0x" + hash.ToString("X8", CultureInfo.InvariantCulture) + ")")
+                    : name;
+            }
+
+            return GetArchetypeDebugName(hash);
+        }
+
+        private string GetArchetypeDebugName(uint hash)
+        {
+            if (hash == 0)
+            {
+                return "hash_0x00000000";
+            }
+
+            var resolvedName = JenkIndex.GetString(hash);
+            if (IsResolvedJenkName(resolvedName, hash))
+            {
+                return resolvedName + " (0x" + hash.ToString("X8", CultureInfo.InvariantCulture) + ")";
+            }
+
+            return "hash_0x" + hash.ToString("X8", CultureInfo.InvariantCulture);
         }
 
         private RpfFileEntry GetExportEntryForArchetype(GameFileCache fileCache, Archetype archetype, uint fallbackHash)
@@ -589,7 +1131,7 @@ namespace CodeWalker.Tools
                 uint drawableDictHash = archetype.DrawableDict;
                 if (drawableDictHash != 0)
                 {
-                    var yddEntry = fileCache.GetYddEntry(drawableDictHash);
+                    var yddEntry = FilterEntryByScope(fileCache.GetYddEntry(drawableDictHash));
                     if (yddEntry != null)
                     {
                         return yddEntry;
@@ -627,9 +1169,9 @@ namespace CodeWalker.Tools
                 return null;
             }
 
-            return fileCache.GetYdrEntry(hash)
-                ?? fileCache.GetYftEntry(hash)
-                ?? fileCache.GetYddEntry(hash)
+            return FilterEntryByScope(fileCache.GetYdrEntry(hash))
+                ?? FilterEntryByScope(fileCache.GetYftEntry(hash))
+                ?? FilterEntryByScope(fileCache.GetYddEntry(hash))
                 ?? FindEntryByHash(fileCache, hash, ".ydr", ".yft", ".ydd");
         }
 
@@ -672,14 +1214,16 @@ namespace CodeWalker.Tools
             var extSet = new HashSet<string>(extensions, StringComparer.InvariantCultureIgnoreCase);
             var scanned = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
 
-            foreach (var rpf in fileCache.RpfMan.ModRpfs)
+            foreach (var rpf in EnumerateScopedModRpfs(fileCache))
             {
                 if (rpf == null) continue;
                 if (!scanned.Add(rpf.Path ?? string.Empty)) continue;
                 var entry = FindEntryByHash(rpf, hash, extSet);
                 if (entry != null) return entry;
             }
-            foreach (var rpf in fileCache.RpfMan.AllRpfs)
+
+            var fallbackRpfs = HasPreferredRpfScope ? fileCache.RpfMan.AllNoModRpfs : fileCache.RpfMan.AllRpfs;
+            foreach (var rpf in fallbackRpfs)
             {
                 if (rpf == null) continue;
                 if (!scanned.Add(rpf.Path ?? string.Empty)) continue;
@@ -697,6 +1241,12 @@ namespace CodeWalker.Tools
             textureLookupCache = new Dictionary<ulong, Texture>();
             ytdFileCache = new Dictionary<uint, YtdFile>();
             missingYtdHashes = new HashSet<uint>();
+            preferredRpfFilter = null;
+            preferredRpfs = null;
+            preferredRpfPaths = null;
+            preferredArchetypeLookup = null;
+            noModArchetypeLookup = null;
+            missingNoModArchetypeHashes = null;
         }
         private bool TryGetIndexedEntryByHash(GameFileCache fileCache, uint hash, string[] extensions, out RpfFileEntry entry)
         {
@@ -741,8 +1291,8 @@ namespace CodeWalker.Tools
             var extSet = new HashSet<string>(extensions, StringComparer.InvariantCultureIgnoreCase);
             var scanned = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
 
-            AddEntriesToIndex(fileCache?.RpfMan?.ModRpfs, extSet, scanned, built);
-            AddEntriesToIndex(fileCache?.RpfMan?.AllRpfs, extSet, scanned, built);
+            AddEntriesToIndex(EnumerateScopedModRpfs(fileCache), extSet, scanned, built);
+            AddEntriesToIndex(HasPreferredRpfScope ? fileCache?.RpfMan?.AllNoModRpfs : fileCache?.RpfMan?.AllRpfs, extSet, scanned, built);
 
             index = built;
             return index;
@@ -840,18 +1390,39 @@ namespace CodeWalker.Tools
                 return false;
             }
 
-            if (!shortName.StartsWith("hash_", StringComparison.InvariantCultureIgnoreCase))
+            var candidate = shortName.Trim();
+            if (candidate.StartsWith("hash_", StringComparison.InvariantCultureIgnoreCase))
+            {
+                candidate = candidate.Substring(5);
+            }
+
+            if (candidate.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
+            {
+                candidate = candidate.Substring(2);
+            }
+
+            if (candidate.Length < 8)
             {
                 return false;
             }
 
-            var hex = shortName.Substring(5);
-            if (hex.StartsWith("0x", StringComparison.InvariantCultureIgnoreCase))
+            var hex = candidate.Substring(0, 8);
+            if (!hex.All(Uri.IsHexDigit))
             {
-                hex = hex.Substring(2);
+                return false;
+            }
+
+            if ((candidate.Length > 8) && !IsHashSuffixDelimiter(candidate[8]))
+            {
+                return false;
             }
 
             return uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out hash);
+        }
+
+        private bool IsHashSuffixDelimiter(char value)
+        {
+            return (value == '_') || (value == '-') || (value == ' ');
         }
 
         private bool AreEquivalentExportArchetypes(Archetype left, Archetype right)
@@ -955,6 +1526,7 @@ namespace CodeWalker.Tools
             }
 
             result.MissingTextures += missingTextures.Count;
+            result.MissingTextureNames.AddRange(missingTextures.OrderBy(name => name, StringComparer.InvariantCultureIgnoreCase));
         }
 
         private GameFile LoadTargetFileForTextureExport(GameFileCache fileCache, RpfFileEntry entry)
@@ -1189,7 +1761,7 @@ namespace CodeWalker.Tools
                 drawableArchetypeHash = archetypeHashHint;
             }
 
-            var drawableArchetype = FindTargetArchetype(target, drawableArchetypeHash) ?? fileCache.GetArchetype(drawableArchetypeHash) ?? fallbackArchetype;
+            var drawableArchetype = FindTargetArchetype(target, drawableArchetypeHash) ?? GetScopedArchetype(fileCache, drawableArchetypeHash) ?? fallbackArchetype;
             var primaryTextureDictHash = (uint)(drawableArchetype?.TextureDict ?? 0);
             if (primaryTextureDictHash == 0)
             {
@@ -1240,11 +1812,54 @@ namespace CodeWalker.Tools
                     }
                     else
                     {
-                        var missingName = string.IsNullOrEmpty(textureRef.Name) ? textureRef.NameHash.ToString() : textureRef.Name;
+                        var missingName = GetTextureDebugName(textureRef.Name, textureRef.NameHash);
                         missingTextures.Add(missingName);
                     }
                 }
             }
+        }
+
+        private string GetTextureDebugName(string name, uint hash)
+        {
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return (hash != 0)
+                    ? (name + " (0x" + hash.ToString("X8", CultureInfo.InvariantCulture) + ")")
+                    : name;
+            }
+
+            if (hash == 0)
+            {
+                return "hash_0x00000000";
+            }
+
+            var resolvedName = JenkIndex.GetString(hash);
+            if (IsResolvedJenkName(resolvedName, hash))
+            {
+                return resolvedName + " (0x" + hash.ToString("X8", CultureInfo.InvariantCulture) + ")";
+            }
+
+            return "hash_0x" + hash.ToString("X8", CultureInfo.InvariantCulture);
+        }
+
+        private bool IsResolvedJenkName(string value, uint hash)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            if (value.StartsWith("hash_", StringComparison.InvariantCultureIgnoreCase))
+            {
+                return false;
+            }
+
+            if (uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedDecimal) && (parsedDecimal == hash))
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private uint GetDrawableArchetypeHash(DrawableBase drawable)
@@ -1335,7 +1950,7 @@ namespace CodeWalker.Tools
                 }
             }
 
-            var ytd = fileCache.TryGetTextureDictForTexture(textureHash);
+            var ytd = FilterGameFileByScope(fileCache.TryGetTextureDictForTexture(textureHash));
             if ((ytd != null) && !ytd.Loaded)
             {
                 fileCache.LoadFile(ytd);
@@ -1408,7 +2023,7 @@ namespace CodeWalker.Tools
                 return EnsureYtdLoaded(fileCache, cachedYtd) ? cachedYtd : null;
             }
 
-            var ytd = fileCache.GetYtd(textureDictHash);
+            var ytd = FilterGameFileByScope(fileCache.GetYtd(textureDictHash));
             if (ytd == null)
             {
                 var ytdEntry = FindEntryByHash(fileCache, textureDictHash, ".ytd");

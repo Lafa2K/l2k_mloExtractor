@@ -24,14 +24,14 @@ Without CodeWalker and its source foundation, this tool would not exist in its c
 
 **Sempre atualize a pasta `mods` com props addon antes de abrir a aplicacao, para que o cache seja montado corretamente.**
 
-**IMPORTANTE:** copie todos os arquivos addon para a pasta `mods` e crie um `RPF` com qualquer nome dentro de `mods`.  
-Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props addon, evitando falhas e recursos ausentes na hora de exportar para o Blender.
+**IMPORTANTE:** copie todos os arquivos addon para a pasta `mods` e crie um `RPF` com um nome unico dentro de `mods`.  
+Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props addon, evitando falhas e recursos ausentes na hora de exportar para o Blender. Se usar o campo `Addon RPF`, informe esse nome unico para evitar colisao com outros pacotes.
 
 ### Como usar
 
 1. Faca backup do seu mod antes de qualquer teste.
 2. Rode `Blender MLO Extractor.exe`.
-3. Para props addon, crie um `RPF` com qualquer nome dentro da pasta `mods` e copie o conteudo do addon para dentro dele.
+3. Para props addon, crie um `RPF` com nome unico dentro da pasta `mods` e copie o conteudo do addon para dentro dele.
 4. Espere a ferramenta terminar o carregamento inicial dos arquivos do GTA.
 5. Abra o `YTYP` onde esta o seu MLO. Nao e necessario converter para XML, mas `*.ytyp.xml` tambem e suportado.
 6. A ferramenta vai criar uma pasta ao lado do arquivo original no formato `Mlo Extracted - <nome>`.
@@ -57,14 +57,14 @@ Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props a
 
 **Always update the `mods` folder with addon props before opening the application so the cache can be built correctly.**
 
-**IMPORTANT:** copy all addon files into the `mods` folder and create an `RPF` with any name inside `mods`.  
-This helps the tool resolve hashes correctly and locate addon props, avoiding missing resources and export problems when sending the result to Blender.
+**IMPORTANT:** copy all addon files into the `mods` folder and create an `RPF` with a unique name inside `mods`.  
+This helps the tool resolve hashes correctly and locate addon props, avoiding missing resources and export problems when sending the result to Blender. If you use the `Addon RPF` field, enter that same unique name to avoid collisions with other packages.
 
 ### How to use
 
 1. Back up your mod before testing anything.
 2. Run `Blender MLO Extractor.exe`.
-3. For addon props, create an `RPF` with any name inside the `mods` folder and copy the addon content into it.
+3. For addon props, create an `RPF` with a unique name inside the `mods` folder and copy the addon content into it.
 4. Wait until the tool finishes loading the GTA files.
 5. Open the `YTYP` that contains your MLO. You do not need to convert it to XML, although `*.ytyp.xml` is also supported.
 6. The tool will create a folder next to the original file using the format `Mlo Extracted - <name>`.

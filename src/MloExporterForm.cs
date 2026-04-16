@@ -2,9 +2,11 @@ using CodeWalker.GameFiles;
 using CodeWalker.Properties;
 using CodeWalker.Tools;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -54,9 +56,11 @@ namespace CodeWalker.MloExporter
         private Label CacheStatusLabel;
         private Label InputPathLabel;
         private Label OutputPathLabel;
+        private Label AddonRpfLabel;
         private Label StatusLabel;
         private ProgressBar ExportProgressBar;
         private TextBox SummaryTextBox;
+        private TextBox AddonRpfTextBox;
         private OpenFileDialog OpenFileDialog;
 
         private volatile bool CacheReady = false;
@@ -101,7 +105,7 @@ namespace CodeWalker.MloExporter
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(800, 700);
             AutoScroll = true;
-            AutoScrollMinSize = new Size(0, 900);
+            AutoScrollMinSize = new Size(0, 980);
             LoadWindowIcon();
 
             OpenFileDialog = new OpenFileDialog();
@@ -231,10 +235,30 @@ namespace CodeWalker.MloExporter
             };
             Controls.Add(OutputPathLabel);
 
-            ImportAllMloCheckBox = new CheckBox()
+            AddonRpfLabel = new Label()
             {
                 Left = 20,
                 Top = 482,
+                Width = 90,
+                Height = 20,
+                Text = "Addon RPF:"
+            };
+            Controls.Add(AddonRpfLabel);
+
+            AddonRpfTextBox = new TextBox()
+            {
+                Left = 110,
+                Top = 478,
+                Width = 650,
+                Height = 24,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            Controls.Add(AddonRpfTextBox);
+
+            ImportAllMloCheckBox = new CheckBox()
+            {
+                Left = 20,
+                Top = 518,
                 Width = 200,
                 Height = 24,
                 Checked = true,
@@ -247,7 +271,7 @@ namespace CodeWalker.MloExporter
             RoomsGroupBox = new GroupBox()
             {
                 Left = 20,
-                Top = 515,
+                Top = 551,
                 Width = 360,
                 Height = 190,
                 Text = "Rooms (0)"
@@ -265,7 +289,7 @@ namespace CodeWalker.MloExporter
             EntitySetsGroupBox = new GroupBox()
             {
                 Left = 400,
-                Top = 515,
+                Top = 551,
                 Width = 360,
                 Height = 190,
                 Text = "Entity Sets (0)"
@@ -283,7 +307,7 @@ namespace CodeWalker.MloExporter
             ExportProgressBar = new ProgressBar()
             {
                 Left = 20,
-                Top = 720,
+                Top = 756,
                 Width = 740,
                 Height = 22,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
@@ -297,7 +321,7 @@ namespace CodeWalker.MloExporter
             StatusLabel = new Label()
             {
                 Left = 20,
-                Top = 750,
+                Top = 786,
                 Width = 740,
                 Height = 22,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
@@ -308,9 +332,9 @@ namespace CodeWalker.MloExporter
             SummaryTextBox = new TextBox()
             {
                 Left = 20,
-                Top = 780,
+                Top = 816,
                 Width = 740,
-                Height = 100,
+                Height = 120,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Multiline = true,
                 ReadOnly = true,
@@ -760,7 +784,8 @@ namespace CodeWalker.MloExporter
         {
             var selection = new YtypPropExportSelection()
             {
-                ImportAllMlo = ImportAllMloCheckBox.Checked
+                ImportAllMlo = ImportAllMloCheckBox.Checked,
+                PreferredRpfName = AddonRpfTextBox.Text
             };
 
             foreach (var checkedItem in RoomsCheckedListBox.CheckedItems)
@@ -790,6 +815,10 @@ namespace CodeWalker.MloExporter
             sb.AppendLine("Output: " + outputFolder);
             sb.AppendLine("MLO XML: " + Path.Combine(outputFolder, result.ExportedYtypXmlFileName ?? "export.ytyp.xml"));
             sb.AppendLine("Drawable folder: " + Path.Combine(outputFolder, YtypPropExporter.DrawableFolderName));
+            if (!string.IsNullOrWhiteSpace(AddonRpfTextBox.Text))
+            {
+                sb.AppendLine("Scoped addon RPF: " + AddonRpfTextBox.Text.Trim());
+            }
             sb.AppendLine(result.ExportedTargets.ToString() + " of " + result.TotalTargets.ToString() + " prop files exported.");
 
             if (result.ExportedTextures > 0)
@@ -799,14 +828,17 @@ namespace CodeWalker.MloExporter
             if (result.MissingTextures > 0)
             {
                 sb.AppendLine(result.MissingTextures.ToString() + " referenced textures were not found.");
+                AppendGroupedSummaryEntries(sb, "Missing textures:", result.MissingTextureNames);
             }
             if (result.MissingArchetypes > 0)
             {
                 sb.AppendLine(result.MissingArchetypes.ToString() + " prop archetypes could not be resolved.");
+                AppendGroupedSummaryEntries(sb, "Missing archetypes:", result.MissingArchetypeNames);
             }
             if (result.MissingResources > 0)
             {
                 sb.AppendLine(result.MissingResources.ToString() + " prop resources were not found.");
+                AppendGroupedSummaryEntries(sb, "Missing resources:", result.MissingResourceNames);
             }
             if (result.Errors.Count > 0)
             {
@@ -819,6 +851,33 @@ namespace CodeWalker.MloExporter
             }
 
             return sb.ToString();
+        }
+
+        private void AppendGroupedSummaryEntries(StringBuilder sb, string title, IEnumerable<string> values)
+        {
+            var groupedValues = values?
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .GroupBy(value => value, StringComparer.InvariantCultureIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key, StringComparer.InvariantCultureIgnoreCase)
+                .ToArray();
+
+            if ((groupedValues == null) || (groupedValues.Length == 0))
+            {
+                return;
+            }
+
+            sb.AppendLine(title);
+            foreach (var group in groupedValues)
+            {
+                var line = " - " + group.Key;
+                if (group.Count() > 1)
+                {
+                    line += " x" + group.Count().ToString();
+                }
+
+                sb.AppendLine(line);
+            }
         }
 
         private void SetBusyUiState(bool busy)
@@ -835,6 +894,7 @@ namespace CodeWalker.MloExporter
             ExportButton.Enabled = CacheReady && (LoadedSelectionInfo != null) && !busy;
             ExportTexturesCheckBox.Enabled = !busy;
             OpenFolderCheckBox.Enabled = !busy;
+            AddonRpfTextBox.Enabled = !busy;
             ImportAllMloCheckBox.Enabled = (LoadedSelectionInfo != null) && !busy;
             RoomsCheckedListBox.Enabled = (LoadedSelectionInfo != null) && !ImportAllMloCheckBox.Checked && !busy;
             EntitySetsCheckedListBox.Enabled = (LoadedSelectionInfo != null) && !busy;

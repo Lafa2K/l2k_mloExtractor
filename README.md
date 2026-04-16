@@ -20,36 +20,17 @@ Without CodeWalker and its source foundation, this tool would not exist in its c
 
 ---
 
-## Portugues (PT-BR)
+## README Guide
 
-**Sempre atualize a pasta `mods` com props addon antes de abrir a aplicacao, para que o cache seja montado corretamente.**
+This README includes 2 guides:
 
-**IMPORTANTE:** copie todos os arquivos addon para a pasta `mods` e crie um `RPF` com um nome unico dentro de `mods`.  
-Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props addon, evitando falhas e recursos ausentes na hora de exportar para o Blender. Se usar o campo `Addon RPF`, informe esse nome unico para evitar colisao com outros pacotes.
+- English (EN)
+- Portugues (PT-BR)
 
-### Como usar
+Quick navigation:
 
-1. Faca backup do seu mod antes de qualquer teste.
-2. Rode `Blender MLO Extractor.exe`.
-3. Para props addon, crie um `RPF` com nome unico dentro da pasta `mods` e copie o conteudo do addon para dentro dele.
-4. Espere a ferramenta terminar o carregamento inicial dos arquivos do GTA.
-5. Abra o `YTYP` onde esta o seu MLO. Nao e necessario converter para XML, mas `*.ytyp.xml` tambem e suportado.
-6. A ferramenta vai criar uma pasta ao lado do arquivo original no formato `Mlo Extracted - <nome>`.
-7. Dentro dela, o XML principal sai com o nome do arquivo original, por exemplo `meu_interior.ytyp.xml`.
-8. Os modelos e texturas relacionados sao exportados para a pasta `Drawable`.
-9. No Blender, o fluxo recomendado e importar primeiro o conteudo de `Drawable` e depois importar o `arquivo.ytyp.xml` para aplicar a estrutura e o posicionamento do interior.
-
-### Observacoes
-
-- Em alguns casos a primeira carga pode demorar um pouco, principalmente quando existem props addon.
-- A ferramenta tenta localizar modelos e texturas externas, inclusive dentro de `mods`.
-- Texturas compartilhadas agora sao cacheadas por YTD durante a exportacao para evitar reabrir o mesmo dictionary varias vezes.
-- O resultado da exportacao e salvo ao lado do arquivo original para facilitar a organizacao.
-- Se aparecer `prop archetypes could not be resolved` ou `prop resources were not found`, normalmente isso significa que parte do conteudo referenciado nao estava disponivel no GTA, `mods` ou RPF carregado durante a extracao.
-
-### Tutorial
-
-- Video tutorial placeholder: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+- [English Guide](#english-en)
+- [Guia PT-BR](#portugues-pt-br)
 
 ---
 
@@ -79,6 +60,39 @@ This helps the tool resolve hashes correctly and locate addon props, avoiding mi
 - Shared textures are now cached per YTD during export to avoid reopening the same dictionary repeatedly.
 - Export output is saved next to the original file for easier organization.
 - If you see `prop archetypes could not be resolved` or `prop resources were not found`, it usually means some referenced content was not available in the loaded GTA, `mods`, or RPF data during extraction.
+
+### Tutorial
+
+- Video tutorial placeholder: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+---
+
+## Portugues (PT-BR)
+
+**Sempre atualize a pasta `mods` com props addon antes de abrir a aplicacao, para que o cache seja montado corretamente.**
+
+**IMPORTANTE:** copie todos os arquivos addon para a pasta `mods` e crie um `RPF` com um nome unico dentro de `mods`.  
+Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props addon, evitando falhas e recursos ausentes na hora de exportar para o Blender. Se usar o campo `Addon RPF`, informe esse nome unico para evitar colisao com outros pacotes.
+
+### Como usar
+
+1. Faca backup do seu mod antes de qualquer teste.
+2. Rode `Blender MLO Extractor.exe`.
+3. Para props addon, crie um `RPF` com nome unico dentro da pasta `mods` e copie o conteudo do addon para dentro dele.
+4. Espere a ferramenta terminar o carregamento inicial dos arquivos do GTA.
+5. Abra o `YTYP` onde esta o seu MLO. Nao e necessario converter para XML, mas `*.ytyp.xml` tambem e suportado.
+6. A ferramenta vai criar uma pasta ao lado do arquivo original no formato `Mlo Extracted - <nome>`.
+7. Dentro dela, o XML principal sai com o nome do arquivo original, por exemplo `meu_interior.ytyp.xml`.
+8. Os modelos e texturas relacionados sao exportados para a pasta `Drawable`.
+9. No Blender, o fluxo recomendado e importar primeiro o conteudo de `Drawable` e depois importar o `arquivo.ytyp.xml` para aplicar a estrutura e o posicionamento do interior.
+
+### Observacoes
+
+- Em alguns casos a primeira carga pode demorar um pouco, principalmente quando existem props addon.
+- A ferramenta tenta localizar modelos e texturas externas, inclusive dentro de `mods`.
+- Texturas compartilhadas agora sao cacheadas por YTD durante a exportacao para evitar reabrir o mesmo dictionary varias vezes.
+- O resultado da exportacao e salvo ao lado do arquivo original para facilitar a organizacao.
+- Se aparecer `prop archetypes could not be resolved` ou `prop resources were not found`, normalmente isso significa que parte do conteudo referenciado nao estava disponivel no GTA, `mods` ou RPF carregado durante a extracao.
 
 ### Tutorial
 

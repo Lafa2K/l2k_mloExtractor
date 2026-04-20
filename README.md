@@ -63,7 +63,7 @@ This helps the tool resolve hashes correctly and locate addon props, avoiding mi
 
 ### Tutorial
 
-- Video tutorial placeholder: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+- Video tutorial: https://www.youtube.com/watch?v=XO4-9dfibSc
 
 ---
 
@@ -72,14 +72,13 @@ This helps the tool resolve hashes correctly and locate addon props, avoiding mi
 **Sempre atualize a pasta `mods` com props addon antes de abrir a aplicacao, para que o cache seja montado corretamente.**
 
 **IMPORTANTE:** copie todos os arquivos addon para a pasta `mods` e crie um `RPF` com um nome unico dentro de `mods`.  
-Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props addon, evitando falhas e recursos ausentes na hora de exportar para o Blender. Se usar o campo `Addon RPF`, informe esse nome unico para evitar colisao com outros pacotes.
-
+Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props addon, evitando falhas e recursos ausentes na hora de exportar para o Blender.
 ### Como usar
 
 1. Faca backup do seu mod antes de qualquer teste.
 2. Rode `Blender MLO Extractor.exe`.
 3. Para props addon, crie um `RPF` com nome unico dentro da pasta `mods` e copie o conteudo do addon para dentro dele.
-4. Espere a ferramenta terminar o carregamento inicial dos arquivos do GTA.
+4. Só após fazer a copia dos arquivos você pode abrir a ferramenta, então espere terminar o carregamento inicial dos arquivos do GTA.
 5. Abra o `YTYP` onde esta o seu MLO. Nao e necessario converter para XML, mas `*.ytyp.xml` tambem e suportado.
 6. A ferramenta vai criar uma pasta ao lado do arquivo original no formato `Mlo Extracted - <nome>`.
 7. Dentro dela, o XML principal sai com o nome do arquivo original, por exemplo `meu_interior.ytyp.xml`.
@@ -96,7 +95,7 @@ Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props a
 
 ### Tutorial
 
-- Video tutorial placeholder: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+- Video tutorial: https://www.youtube.com/watch?v=XO4-9dfibSc
 
 ---
 

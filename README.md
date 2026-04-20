@@ -113,3 +113,9 @@ The executable will be generated at:
 ```text
 build\Release\Blender MLO Extractor.exe
 ```
+
+The build script also creates a distributable zip package at:
+
+```text
+build\l2k_mloExtractor-<version>-win64.zip
+```

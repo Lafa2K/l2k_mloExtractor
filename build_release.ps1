@@ -29,6 +29,9 @@ $lib = Join-Path $root "lib"
 $img = Join-Path $root "img"
 $build = Join-Path $root "build"
 $release = Join-Path $build "Release"
+$packageVersion = "1.1.1"
+$packageName = "l2k_mloExtractor-$packageVersion-win64"
+$packageZip = Join-Path $build ($packageName + ".zip")
 
 $referenceRoot = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8"
 $facadeRoot = Join-Path $referenceRoot "Facades"
@@ -36,6 +39,7 @@ $facadeRoot = Join-Path $referenceRoot "Facades"
 $csc = Get-CscPath
 
 $required = @(
+    (Join-Path $src "AssemblyInfo.cs"),
     (Join-Path $src "Program.cs"),
     (Join-Path $src "MloExporterForm.cs"),
     (Join-Path $src "YtypPropExporter.cs"),
@@ -84,6 +88,7 @@ $arguments = @(
     "/r:$(Join-Path $lib 'CodeWalker.exe')",
     "/r:$(Join-Path $lib 'CodeWalker.Core.dll')",
     "/r:$(Join-Path $lib 'CodeWalker.WinForms.dll')",
+    (Join-Path $src "AssemblyInfo.cs"),
     (Join-Path $src "Program.cs"),
     (Join-Path $src "MloExporterForm.cs"),
     (Join-Path $src "YtypPropExporter.cs")
@@ -112,6 +117,9 @@ Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination (Join-Path $re
 </configuration>
 '@ | Set-Content -LiteralPath (Join-Path $release "Blender MLO Extractor.exe.config") -Encoding UTF8
 
+Compress-Archive -Path (Join-Path $release "*") -DestinationPath $packageZip -Force
+
 Write-Host ""
 Write-Host "Build complete:"
 Write-Host $outputExe
+Write-Host $packageZip

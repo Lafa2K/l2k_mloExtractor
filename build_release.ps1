@@ -30,7 +30,7 @@ $img = Join-Path $root "img"
 $build = Join-Path $root "build"
 $release = Join-Path $build "Release"
 $packageVersion = "1.1.2"
-$packageName = "l2k_mloExtractor-$packageVersion-win64"
+$packageName = "l2k_extractor-$packageVersion-win64"
 $packageZip = Join-Path $build ($packageName + ".zip")
 
 $referenceRoot = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8"

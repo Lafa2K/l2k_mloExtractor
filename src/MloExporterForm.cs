@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -21,6 +22,7 @@ namespace CodeWalker.MloExporter
         private const string LoadingBannerFileName = "banner_loading.gif";
         private const string LegacyBannerFileName = "banner.png";
         private const string IconFileName = "icon.ico";
+        private const int DesktopMargin = 12;
 
         private static readonly Color ThemeBase = Color.FromArgb(0x12, 0x18, 0x2E);
         private static readonly Color ThemeBackground = Color.FromArgb(0x0B, 0x0F, 0x1D);
@@ -40,9 +42,22 @@ namespace CodeWalker.MloExporter
             }
         }
 
+        private sealed class YmapFileListItem
+        {
+            public YmapExteriorFileInfo Item { get; set; }
+
+            public override string ToString()
+            {
+                return Item?.Label ?? string.Empty;
+            }
+        }
+
         private GameFileCache GameFileCache;
         private readonly YtypPropExporter Exporter = new YtypPropExporter();
 
+        private TabControl WorkflowTabControl;
+        private TabPage MloTabPage;
+        private TabPage YmapExteriorTabPage;
         private Button OpenButton;
         private Button ExportButton;
         private PictureBox BannerPictureBox;
@@ -62,6 +77,20 @@ namespace CodeWalker.MloExporter
         private TextBox SummaryTextBox;
         private TextBox AddonRpfTextBox;
         private OpenFileDialog OpenFileDialog;
+        private Button OpenYmapButton;
+        private Button ExportYmapButton;
+        private CheckBox ExportYmapTexturesCheckBox;
+        private CheckBox OpenYmapFolderCheckBox;
+        private Label YmapInputPathLabel;
+        private Label YmapOutputPathLabel;
+        private Label YmapAddonRpfLabel;
+        private Label YmapStatusLabel;
+        private TextBox YmapAddonRpfTextBox;
+        private TextBox YmapSummaryTextBox;
+        private GroupBox YmapFilesGroupBox;
+        private ListBox YmapFilesListBox;
+        private ProgressBar YmapExportProgressBar;
+        private OpenFileDialog OpenYmapFileDialog;
 
         private volatile bool CacheReady = false;
         private volatile bool CacheInitializing = true;
@@ -73,6 +102,9 @@ namespace CodeWalker.MloExporter
         private string LoadedInputPath;
         private string LoadedOutputPath;
         private YtypPropSelectionInfo LoadedSelectionInfo;
+        private string[] LoadedYmapInputPaths;
+        private string LoadedYmapOutputPath;
+        private YmapExteriorSelectionInfo LoadedYmapSelectionInfo;
 
         public MloExporterForm()
         {
@@ -85,6 +117,7 @@ namespace CodeWalker.MloExporter
         protected override async void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            FitWindowToWorkingArea();
 
             if (!GTAFolder.UpdateGTAFolder(true))
             {
@@ -101,17 +134,22 @@ namespace CodeWalker.MloExporter
         {
             Text = AppTitle;
             Width = 800;
-            Height = 820;
+            Height = 860;
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(800, 700);
             AutoScroll = true;
-            AutoScrollMinSize = new Size(0, 980);
+            AutoScrollMinSize = new Size(0, 1035);
             LoadWindowIcon();
 
             OpenFileDialog = new OpenFileDialog();
             OpenFileDialog.Filter = "YTYP files|*.ytyp;*.ytyp.xml|Binary YTYP|*.ytyp|YTYP XML|*.ytyp.xml";
             OpenFileDialog.Multiselect = false;
             OpenFileDialog.Title = "Open a YTYP or YTYP.XML";
+
+            OpenYmapFileDialog = new OpenFileDialog();
+            OpenYmapFileDialog.Filter = "YMAP files|*.ymap;*.ymap.xml|Binary YMAP|*.ymap|YMAP XML|*.ymap.xml";
+            OpenYmapFileDialog.Multiselect = true;
+            OpenYmapFileDialog.Title = "Open one or more YMAP or YMAP.XML files";
 
             BannerPictureBox = new PictureBox()
             {
@@ -125,140 +163,198 @@ namespace CodeWalker.MloExporter
             };
             Controls.Add(BannerPictureBox);
 
-            var titleLabel = new Label()
+            WorkflowTabControl = new TabControl()
             {
                 Left = 20,
-                Top = 280,
+                Top = 285,
                 Width = 740,
+                Height = 700,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            Controls.Add(WorkflowTabControl);
+
+            MloTabPage = new TabPage("MLO EXTRACTION")
+            {
+                BackColor = ThemeBackground,
+                ForeColor = ThemeTextPrimary
+            };
+            WorkflowTabControl.Controls.Add(MloTabPage);
+
+            YmapExteriorTabPage = new TabPage("YMAP EXTERIOR EXTRACTION")
+            {
+                BackColor = ThemeBackground,
+                ForeColor = ThemeTextPrimary
+            };
+            WorkflowTabControl.Controls.Add(YmapExteriorTabPage);
+
+            CreateMloExtractionTab();
+            CreateYmapExteriorExtractionTab();
+
+            ApplyTheme();
+            UpdateActivityVisualState();
+        }
+
+        private void FitWindowToWorkingArea()
+        {
+            var workingArea = Screen.FromControl(this).WorkingArea;
+            int maxWidth = Math.Max(MinimumSize.Width, workingArea.Width - (DesktopMargin * 2));
+            int maxHeight = Math.Max(MinimumSize.Height, workingArea.Height - (DesktopMargin * 2));
+
+            if (Width > maxWidth)
+            {
+                Width = maxWidth;
+            }
+
+            if (Height > maxHeight)
+            {
+                Height = maxHeight;
+            }
+
+            int left = workingArea.Left + ((workingArea.Width - Width) / 2);
+            int top = workingArea.Top + ((workingArea.Height - Height) / 2);
+
+            left = Math.Max(workingArea.Left + DesktopMargin, Math.Min(left, workingArea.Right - Width - DesktopMargin));
+            top = Math.Max(workingArea.Top + DesktopMargin, Math.Min(top, workingArea.Bottom - Height - DesktopMargin));
+
+            Location = new Point(left, top);
+        }
+
+        private void CreateMloExtractionTab()
+        {
+            var titleLabel = new Label()
+            {
+                Left = 12,
+                Top = 16,
+                Width = 700,
                 Height = 22,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Text = "Open a YTYP or YTYP.XML, export Drawable assets first, then import the exported YTYP XML in Blender."
             };
-            Controls.Add(titleLabel);
+            MloTabPage.Controls.Add(titleLabel);
 
             ExportTexturesCheckBox = new CheckBox()
             {
-                Left = 20,
-                Top = 315,
+                Left = 12,
+                Top = 50,
                 Width = 260,
                 Height = 24,
                 Checked = true,
                 Text = "Export related and shared textures"
             };
-            Controls.Add(ExportTexturesCheckBox);
+            MloTabPage.Controls.Add(ExportTexturesCheckBox);
 
             OpenFolderCheckBox = new CheckBox()
             {
-                Left = 300,
-                Top = 315,
+                Left = 292,
+                Top = 50,
                 Width = 220,
                 Height = 24,
                 Checked = true,
                 Text = "Open output folder when done"
             };
-            Controls.Add(OpenFolderCheckBox);
+            MloTabPage.Controls.Add(OpenFolderCheckBox);
 
             OpenButton = new Button()
             {
-                Left = 20,
-                Top = 352,
+                Left = 12,
+                Top = 87,
                 Width = 160,
                 Height = 32,
                 Text = "Open YTYP...",
                 Enabled = false
             };
             OpenButton.Click += OpenButton_Click;
-            Controls.Add(OpenButton);
+            MloTabPage.Controls.Add(OpenButton);
 
             ExportButton = new Button()
             {
-                Left = 195,
-                Top = 352,
+                Left = 187,
+                Top = 87,
                 Width = 160,
                 Height = 32,
                 Text = "Export Selected",
                 Enabled = false
             };
             ExportButton.Click += ExportButton_Click;
-            Controls.Add(ExportButton);
+            MloTabPage.Controls.Add(ExportButton);
 
             CacheStatusLabel = new Label()
             {
-                Left = 375,
-                Top = 359,
-                Width = 385,
+                Left = 367,
+                Top = 94,
+                Width = 345,
                 Height = 20,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Text = "Waiting to initialize GTA file cache..."
             };
-            Controls.Add(CacheStatusLabel);
+            MloTabPage.Controls.Add(CacheStatusLabel);
 
             var inputCaption = new Label()
             {
-                Left = 20,
-                Top = 402,
+                Left = 12,
+                Top = 137,
                 Width = 90,
                 Height = 20,
                 Text = "Input:"
             };
-            Controls.Add(inputCaption);
+            MloTabPage.Controls.Add(inputCaption);
 
             InputPathLabel = new Label()
             {
-                Left = 80,
-                Top = 402,
-                Width = 680,
+                Left = 72,
+                Top = 137,
+                Width = 640,
                 Height = 36,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Text = "-"
             };
-            Controls.Add(InputPathLabel);
+            MloTabPage.Controls.Add(InputPathLabel);
 
             var outputCaption = new Label()
             {
-                Left = 20,
-                Top = 442,
+                Left = 12,
+                Top = 177,
                 Width = 90,
                 Height = 20,
                 Text = "Output:"
             };
-            Controls.Add(outputCaption);
+            MloTabPage.Controls.Add(outputCaption);
 
             OutputPathLabel = new Label()
             {
-                Left = 80,
-                Top = 442,
-                Width = 680,
+                Left = 72,
+                Top = 177,
+                Width = 640,
                 Height = 36,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Text = "-"
             };
-            Controls.Add(OutputPathLabel);
+            MloTabPage.Controls.Add(OutputPathLabel);
 
             AddonRpfLabel = new Label()
             {
-                Left = 20,
-                Top = 482,
+                Left = 12,
+                Top = 217,
                 Width = 90,
                 Height = 20,
                 Text = "Addon RPF:"
             };
-            Controls.Add(AddonRpfLabel);
+            MloTabPage.Controls.Add(AddonRpfLabel);
 
             AddonRpfTextBox = new TextBox()
             {
-                Left = 110,
-                Top = 478,
-                Width = 650,
+                Left = 102,
+                Top = 213,
+                Width = 610,
                 Height = 24,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
-            Controls.Add(AddonRpfTextBox);
+            MloTabPage.Controls.Add(AddonRpfTextBox);
 
             ImportAllMloCheckBox = new CheckBox()
             {
-                Left = 20,
-                Top = 518,
+                Left = 12,
+                Top = 253,
                 Width = 200,
                 Height = 24,
                 Checked = true,
@@ -266,17 +362,17 @@ namespace CodeWalker.MloExporter
                 Enabled = false
             };
             ImportAllMloCheckBox.CheckedChanged += ImportAllMloCheckBox_CheckedChanged;
-            Controls.Add(ImportAllMloCheckBox);
+            MloTabPage.Controls.Add(ImportAllMloCheckBox);
 
             RoomsGroupBox = new GroupBox()
             {
-                Left = 20,
-                Top = 551,
-                Width = 360,
-                Height = 190,
+                Left = 12,
+                Top = 286,
+                Width = 340,
+                Height = 175,
                 Text = "Rooms (0)"
             };
-            Controls.Add(RoomsGroupBox);
+            MloTabPage.Controls.Add(RoomsGroupBox);
 
             RoomsCheckedListBox = new CheckedListBox()
             {
@@ -288,13 +384,13 @@ namespace CodeWalker.MloExporter
 
             EntitySetsGroupBox = new GroupBox()
             {
-                Left = 400,
-                Top = 551,
-                Width = 360,
-                Height = 190,
+                Left = 372,
+                Top = 286,
+                Width = 340,
+                Height = 175,
                 Text = "Entity Sets (0)"
             };
-            Controls.Add(EntitySetsGroupBox);
+            MloTabPage.Controls.Add(EntitySetsGroupBox);
 
             EntitySetsCheckedListBox = new CheckedListBox()
             {
@@ -306,9 +402,9 @@ namespace CodeWalker.MloExporter
 
             ExportProgressBar = new ProgressBar()
             {
-                Left = 20,
-                Top = 756,
-                Width = 740,
+                Left = 12,
+                Top = 476,
+                Width = 700,
                 Height = 22,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Minimum = 0,
@@ -316,34 +412,209 @@ namespace CodeWalker.MloExporter
                 Style = ProgressBarStyle.Marquee,
                 MarqueeAnimationSpeed = 30
             };
-            Controls.Add(ExportProgressBar);
+            MloTabPage.Controls.Add(ExportProgressBar);
 
             StatusLabel = new Label()
             {
-                Left = 20,
-                Top = 786,
-                Width = 740,
+                Left = 12,
+                Top = 506,
+                Width = 700,
                 Height = 22,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Text = "Select a YTYP when the cache is ready."
             };
-            Controls.Add(StatusLabel);
+            MloTabPage.Controls.Add(StatusLabel);
 
             SummaryTextBox = new TextBox()
             {
-                Left = 20,
-                Top = 816,
-                Width = 740,
+                Left = 12,
+                Top = 536,
+                Width = 700,
                 Height = 120,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical
             };
-            Controls.Add(SummaryTextBox);
+            MloTabPage.Controls.Add(SummaryTextBox);
+        }
 
-            ApplyTheme();
-            UpdateActivityVisualState();
+        private void CreateYmapExteriorExtractionTab()
+        {
+            var titleLabel = new Label()
+            {
+                Left = 12,
+                Top = 16,
+                Width = 700,
+                Height = 22,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Text = "Open one or more YMAP/YMAP.XML files. YMAP files containing interiors are ignored."
+            };
+            YmapExteriorTabPage.Controls.Add(titleLabel);
+
+            ExportYmapTexturesCheckBox = new CheckBox()
+            {
+                Left = 12,
+                Top = 50,
+                Width = 260,
+                Height = 24,
+                Checked = true,
+                Text = "Export related and shared textures"
+            };
+            YmapExteriorTabPage.Controls.Add(ExportYmapTexturesCheckBox);
+
+            OpenYmapFolderCheckBox = new CheckBox()
+            {
+                Left = 292,
+                Top = 50,
+                Width = 220,
+                Height = 24,
+                Checked = true,
+                Text = "Open output folder when done"
+            };
+            YmapExteriorTabPage.Controls.Add(OpenYmapFolderCheckBox);
+
+            OpenYmapButton = new Button()
+            {
+                Left = 12,
+                Top = 87,
+                Width = 170,
+                Height = 32,
+                Text = "Open YMAPs...",
+                Enabled = false
+            };
+            OpenYmapButton.Click += OpenYmapButton_Click;
+            YmapExteriorTabPage.Controls.Add(OpenYmapButton);
+
+            ExportYmapButton = new Button()
+            {
+                Left = 197,
+                Top = 87,
+                Width = 170,
+                Height = 32,
+                Text = "Export Exterior",
+                Enabled = false
+            };
+            ExportYmapButton.Click += ExportYmapButton_Click;
+            YmapExteriorTabPage.Controls.Add(ExportYmapButton);
+
+            var inputCaption = new Label()
+            {
+                Left = 12,
+                Top = 137,
+                Width = 90,
+                Height = 20,
+                Text = "Input:"
+            };
+            YmapExteriorTabPage.Controls.Add(inputCaption);
+
+            YmapInputPathLabel = new Label()
+            {
+                Left = 72,
+                Top = 137,
+                Width = 640,
+                Height = 50,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Text = "-"
+            };
+            YmapExteriorTabPage.Controls.Add(YmapInputPathLabel);
+
+            var outputCaption = new Label()
+            {
+                Left = 12,
+                Top = 193,
+                Width = 90,
+                Height = 20,
+                Text = "Output:"
+            };
+            YmapExteriorTabPage.Controls.Add(outputCaption);
+
+            YmapOutputPathLabel = new Label()
+            {
+                Left = 72,
+                Top = 193,
+                Width = 640,
+                Height = 36,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Text = "-"
+            };
+            YmapExteriorTabPage.Controls.Add(YmapOutputPathLabel);
+
+            YmapAddonRpfLabel = new Label()
+            {
+                Left = 12,
+                Top = 233,
+                Width = 90,
+                Height = 20,
+                Text = "Addon RPF:"
+            };
+            YmapExteriorTabPage.Controls.Add(YmapAddonRpfLabel);
+
+            YmapAddonRpfTextBox = new TextBox()
+            {
+                Left = 102,
+                Top = 229,
+                Width = 610,
+                Height = 24,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            YmapExteriorTabPage.Controls.Add(YmapAddonRpfTextBox);
+
+            YmapFilesGroupBox = new GroupBox()
+            {
+                Left = 12,
+                Top = 268,
+                Width = 700,
+                Height = 190,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Text = "YMAP Files (0)"
+            };
+            YmapExteriorTabPage.Controls.Add(YmapFilesGroupBox);
+
+            YmapFilesListBox = new ListBox()
+            {
+                Dock = DockStyle.Fill,
+                HorizontalScrollbar = true
+            };
+            YmapFilesGroupBox.Controls.Add(YmapFilesListBox);
+
+            YmapExportProgressBar = new ProgressBar()
+            {
+                Left = 12,
+                Top = 476,
+                Width = 700,
+                Height = 22,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Minimum = 0,
+                Maximum = 1000,
+                Style = ProgressBarStyle.Marquee,
+                MarqueeAnimationSpeed = 30
+            };
+            YmapExteriorTabPage.Controls.Add(YmapExportProgressBar);
+
+            YmapStatusLabel = new Label()
+            {
+                Left = 12,
+                Top = 506,
+                Width = 700,
+                Height = 22,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Text = "Select YMAP files when the cache is ready."
+            };
+            YmapExteriorTabPage.Controls.Add(YmapStatusLabel);
+
+            YmapSummaryTextBox = new TextBox()
+            {
+                Left = 12,
+                Top = 536,
+                Width = 700,
+                Height = 120,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical
+            };
+            YmapExteriorTabPage.Controls.Add(YmapSummaryTextBox);
         }
 
         private void LoadWindowIcon()
@@ -424,15 +695,37 @@ namespace CodeWalker.MloExporter
 
             if (showBusyProgress)
             {
-                ExportProgressBar.Style = ProgressBarStyle.Marquee;
-                ExportProgressBar.MarqueeAnimationSpeed = 30;
+                SetProgressBarBusy(ExportProgressBar);
+                SetProgressBarBusy(YmapExportProgressBar);
             }
             else
             {
-                ExportProgressBar.MarqueeAnimationSpeed = 0;
-                ExportProgressBar.Style = ProgressBarStyle.Continuous;
-                ExportProgressBar.Value = 0;
+                SetProgressBarIdle(ExportProgressBar);
+                SetProgressBarIdle(YmapExportProgressBar);
             }
+        }
+
+        private void SetProgressBarBusy(ProgressBar progressBar)
+        {
+            if (progressBar == null)
+            {
+                return;
+            }
+
+            progressBar.Style = ProgressBarStyle.Marquee;
+            progressBar.MarqueeAnimationSpeed = 30;
+        }
+
+        private void SetProgressBarIdle(ProgressBar progressBar)
+        {
+            if (progressBar == null)
+            {
+                return;
+            }
+
+            progressBar.MarqueeAnimationSpeed = 0;
+            progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.Value = 0;
         }
 
         private void ApplyTheme()
@@ -475,6 +768,12 @@ namespace CodeWalker.MloExporter
                     checkedListBox.ForeColor = ThemeTextPrimary;
                     checkedListBox.BorderStyle = BorderStyle.None;
                 }
+                else if (control is ListBox listBox)
+                {
+                    listBox.BackColor = ThemeSurface;
+                    listBox.ForeColor = ThemeTextPrimary;
+                    listBox.BorderStyle = BorderStyle.None;
+                }
                 else if (control is TextBox textBox)
                 {
                     textBox.BackColor = ThemeSurface;
@@ -490,6 +789,11 @@ namespace CodeWalker.MloExporter
                 {
                     pictureBox.BackColor = ThemeSurface;
                 }
+                else if (control is TabPage tabPage)
+                {
+                    tabPage.BackColor = ThemeBackground;
+                    tabPage.ForeColor = ThemeTextPrimary;
+                }
 
                 if (control.HasChildren)
                 {
@@ -501,6 +805,9 @@ namespace CodeWalker.MloExporter
             InputPathLabel.ForeColor = ThemeTextPrimary;
             OutputPathLabel.ForeColor = ThemeTextPrimary;
             StatusLabel.ForeColor = ThemeTextPrimary;
+            YmapInputPathLabel.ForeColor = ThemeTextPrimary;
+            YmapOutputPathLabel.ForeColor = ThemeTextPrimary;
+            YmapStatusLabel.ForeColor = ThemeTextPrimary;
         }
 
         private async Task InitializeCacheAsync()
@@ -528,8 +835,9 @@ namespace CodeWalker.MloExporter
                 StartCacheContentLoop();
                 CacheReady = true;
                 OpenButton.Enabled = true;
-                SetCacheStatus("Ready. Open a YTYP or drop one on this window.");
-                UpdateStatusSafe("Ready to load an MLO.");
+                OpenYmapButton.Enabled = true;
+                SetCacheStatus("Ready. Open a YTYP/YMAP or drop files on this window.");
+                UpdateStatusSafe("Ready to load files.");
                 UpdateSelectionUiState();
             }
             catch (Exception ex)
@@ -569,12 +877,43 @@ namespace CodeWalker.MloExporter
             await ExportLoadedFileAsync();
         }
 
+        private async void OpenYmapButton_Click(object sender, EventArgs e)
+        {
+            if (ExportInProgress)
+            {
+                return;
+            }
+
+            if (OpenYmapFileDialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            await LoadSelectedYmapFilesAsync(OpenYmapFileDialog.FileNames);
+        }
+
+        private async void ExportYmapButton_Click(object sender, EventArgs e)
+        {
+            if (ExportInProgress)
+            {
+                return;
+            }
+
+            await ExportLoadedYmapFilesAsync();
+        }
+
         private void Form_DragEnter(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
                 if ((files != null) && (files.Length == 1) && YtypPropExporter.SupportsInputPath(files[0]))
+                {
+                    e.Effect = DragDropEffects.Copy;
+                    return;
+                }
+
+                if ((files != null) && (files.Length > 0) && files.All(YtypPropExporter.SupportsYmapInputPath))
                 {
                     e.Effect = DragDropEffects.Copy;
                     return;
@@ -592,12 +931,23 @@ namespace CodeWalker.MloExporter
             }
 
             var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-            if ((files == null) || (files.Length != 1))
+            if ((files == null) || (files.Length == 0))
             {
                 return;
             }
 
-            await LoadSelectedFileAsync(files[0]);
+            if ((files.Length == 1) && YtypPropExporter.SupportsInputPath(files[0]))
+            {
+                WorkflowTabControl.SelectedTab = MloTabPage;
+                await LoadSelectedFileAsync(files[0]);
+                return;
+            }
+
+            if (files.All(YtypPropExporter.SupportsYmapInputPath))
+            {
+                WorkflowTabControl.SelectedTab = YmapExteriorTabPage;
+                await LoadSelectedYmapFilesAsync(files);
+            }
         }
 
         private async Task LoadSelectedFileAsync(string inputPath)
@@ -723,6 +1073,134 @@ namespace CodeWalker.MloExporter
             }
         }
 
+        private async Task LoadSelectedYmapFilesAsync(string[] inputPaths)
+        {
+            if (!CacheReady)
+            {
+                MessageBox.Show(this, "The GTA file cache is still loading. Please wait a moment and try again.", AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var paths = inputPaths?
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.InvariantCultureIgnoreCase)
+                .ToArray();
+
+            if ((paths == null) || (paths.Length == 0) || !paths.All(YtypPropExporter.SupportsYmapInputPath))
+            {
+                MessageBox.Show(this, "Only .ymap and .ymap.xml files are supported.", AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            YmapInputPathLabel.Text = BuildYmapInputLabel(paths);
+            YmapOutputPathLabel.Text = string.Empty;
+            YmapSummaryTextBox.Clear();
+            YmapFilesListBox.Items.Clear();
+            YmapFilesGroupBox.Text = "YMAP Files (0)";
+
+            SetBusyUiState(true);
+            UpdateStatusSafe("Loading exterior YMAP files...");
+
+            Exception loadException = null;
+            YmapExteriorSelectionInfo selectionInfo = null;
+
+            try
+            {
+                selectionInfo = await Task.Run(() => Exporter.LoadYmapExteriorSelectionInfo(paths));
+            }
+            catch (Exception ex)
+            {
+                loadException = ex;
+            }
+            finally
+            {
+                SetBusyUiState(false);
+            }
+
+            if (loadException != null)
+            {
+                ResetLoadedYmapSelection();
+                YmapSummaryTextBox.Text = loadException.ToString();
+                MessageBox.Show(this, "Unable to load the selected YMAP files:\n" + loadException.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            var outputFolder = YtypPropExporter.GetSuggestedYmapOutputFolderPath(paths);
+            LoadedYmapInputPaths = paths;
+            LoadedYmapOutputPath = outputFolder;
+            LoadedYmapSelectionInfo = selectionInfo;
+            YmapOutputPathLabel.Text = outputFolder;
+            PopulateYmapControls(selectionInfo);
+            UpdateStatusSafe("Choose Export Exterior to export non-interior YMAP props.");
+        }
+
+        private async Task ExportLoadedYmapFilesAsync()
+        {
+            if ((LoadedYmapInputPaths == null) || (LoadedYmapInputPaths.Length == 0) || (LoadedYmapSelectionInfo == null))
+            {
+                MessageBox.Show(this, "Open one or more YMAP files first.", AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (LoadedYmapSelectionInfo.ExportableFiles == 0)
+            {
+                MessageBox.Show(this, "Every selected YMAP contains an interior or has no exterior entities to export.", AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            YmapSummaryTextBox.Clear();
+
+            SetBusyUiState(true);
+            Exception exportException = null;
+            YtypPropExportResult result = null;
+
+            try
+            {
+                result = await Task.Run(() => Exporter.ExportYmapExterior(
+                    GameFileCache,
+                    LoadedYmapInputPaths,
+                    LoadedYmapOutputPath,
+                    ExportYmapTexturesCheckBox.Checked,
+                    YmapAddonRpfTextBox.Text,
+                    UpdateProgressSafe,
+                    UpdateStatusSafe));
+            }
+            catch (Exception ex)
+            {
+                exportException = ex;
+            }
+            finally
+            {
+                SetBusyUiState(false);
+            }
+
+            if (exportException != null)
+            {
+                YmapSummaryTextBox.Text = exportException.ToString();
+                MessageBox.Show(this, "YMAP export failed:\n" + exportException.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (result == null)
+            {
+                return;
+            }
+
+            YmapSummaryTextBox.Text = BuildYmapSummary(result, LoadedYmapOutputPath);
+            UpdateStatusSafe("Exterior YMAP export complete.");
+
+            if (OpenYmapFolderCheckBox.Checked && Directory.Exists(LoadedYmapOutputPath))
+            {
+                try
+                {
+                    Process.Start("explorer", "\"" + LoadedYmapOutputPath + "\"");
+                }
+                catch
+                {
+                }
+            }
+        }
+
         private void PopulateSelectionControls(YtypPropSelectionInfo selectionInfo)
         {
             RoomsCheckedListBox.Items.Clear();
@@ -764,6 +1242,36 @@ namespace CodeWalker.MloExporter
             UpdateSelectionUiState();
         }
 
+        private void PopulateYmapControls(YmapExteriorSelectionInfo selectionInfo)
+        {
+            YmapFilesListBox.Items.Clear();
+
+            if (selectionInfo == null)
+            {
+                UpdateSelectionUiState();
+                return;
+            }
+
+            foreach (var file in selectionInfo.Files)
+            {
+                YmapFilesListBox.Items.Add(new YmapFileListItem() { Item = file });
+            }
+
+            YmapFilesGroupBox.Text = "YMAP Files (" + selectionInfo.TotalFiles.ToString() + ")";
+            YmapSummaryTextBox.Text = BuildYmapLoadedSummary(selectionInfo);
+            UpdateSelectionUiState();
+        }
+
+        private void ResetLoadedYmapSelection()
+        {
+            LoadedYmapInputPaths = null;
+            LoadedYmapOutputPath = null;
+            LoadedYmapSelectionInfo = null;
+            YmapFilesListBox.Items.Clear();
+            YmapFilesGroupBox.Text = "YMAP Files (0)";
+            UpdateSelectionUiState();
+        }
+
         private string BuildLoadedSummary(YtypPropSelectionInfo selectionInfo)
         {
             var sb = new StringBuilder();
@@ -777,6 +1285,38 @@ namespace CodeWalker.MloExporter
             sb.AppendLine();
             sb.AppendLine("Rooms are checked by default.");
             sb.AppendLine("Entity sets are optional and start unchecked.");
+            return sb.ToString();
+        }
+
+        private string BuildYmapInputLabel(string[] inputPaths)
+        {
+            if ((inputPaths == null) || (inputPaths.Length == 0))
+            {
+                return "-";
+            }
+
+            if (inputPaths.Length == 1)
+            {
+                return inputPaths[0];
+            }
+
+            return inputPaths.Length.ToString(CultureInfo.InvariantCulture) + " files selected. First: " + inputPaths[0];
+        }
+
+        private string BuildYmapLoadedSummary(YmapExteriorSelectionInfo selectionInfo)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Loaded " + selectionInfo.TotalFiles.ToString() + " YMAP file(s).");
+            sb.AppendLine(selectionInfo.ExportableFiles.ToString() + " exportable exterior YMAP file(s).");
+            sb.AppendLine(selectionInfo.IgnoredInteriorFiles.ToString() + " YMAP file(s) ignored because they contain interiors.");
+            sb.AppendLine(selectionInfo.TotalExteriorEntities.ToString() + " exterior entit" + (selectionInfo.TotalExteriorEntities == 1 ? "y" : "ies") + " found.");
+            sb.AppendLine();
+            sb.AppendLine("Output layout:");
+            sb.AppendLine("- <source>.ymap.xml in the export root");
+            sb.AppendLine("- Drawable\\ for props and textures");
+            sb.AppendLine();
+            sb.AppendLine("Interior YMAP status text:");
+            sb.AppendLine("This YMAP contains an interior > ignored");
             return sb.ToString();
         }
 
@@ -818,6 +1358,59 @@ namespace CodeWalker.MloExporter
             if (!string.IsNullOrWhiteSpace(AddonRpfTextBox.Text))
             {
                 sb.AppendLine("Scoped addon RPF: " + AddonRpfTextBox.Text.Trim());
+            }
+            sb.AppendLine(result.ExportedTargets.ToString() + " of " + result.TotalTargets.ToString() + " prop files exported.");
+
+            if (result.ExportedTextures > 0)
+            {
+                sb.AppendLine(result.ExportedTextures.ToString() + " textures exported.");
+            }
+            if (result.MissingTextures > 0)
+            {
+                sb.AppendLine(result.MissingTextures.ToString() + " referenced textures were not found.");
+                AppendGroupedSummaryEntries(sb, "Missing textures:", result.MissingTextureNames);
+            }
+            if (result.MissingArchetypes > 0)
+            {
+                sb.AppendLine(result.MissingArchetypes.ToString() + " prop archetypes could not be resolved.");
+                AppendGroupedSummaryEntries(sb, "Missing archetypes:", result.MissingArchetypeNames);
+            }
+            if (result.MissingResources > 0)
+            {
+                sb.AppendLine(result.MissingResources.ToString() + " prop resources were not found.");
+                AppendGroupedSummaryEntries(sb, "Missing resources:", result.MissingResourceNames);
+            }
+            if (result.Errors.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Errors:");
+                foreach (var error in result.Errors)
+                {
+                    sb.AppendLine(error);
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        private string BuildYmapSummary(YtypPropExportResult result, string outputFolder)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Output: " + outputFolder);
+            sb.AppendLine("YMAP XML files: " + result.ExportedSourceXmlFileNames.Count.ToString());
+            foreach (var fileName in result.ExportedSourceXmlFileNames)
+            {
+                sb.AppendLine(" - " + Path.Combine(outputFolder, fileName));
+            }
+            sb.AppendLine("Drawable folder: " + Path.Combine(outputFolder, YtypPropExporter.DrawableFolderName));
+            if (!string.IsNullOrWhiteSpace(YmapAddonRpfTextBox.Text))
+            {
+                sb.AppendLine("Scoped addon RPF: " + YmapAddonRpfTextBox.Text.Trim());
+            }
+            if (result.IgnoredYmapNames.Count > 0)
+            {
+                sb.AppendLine(result.IgnoredYmapNames.Count.ToString() + " YMAP file(s) ignored.");
+                AppendGroupedSummaryEntries(sb, "Ignored YMAP files:", result.IgnoredYmapNames);
             }
             sb.AppendLine(result.ExportedTargets.ToString() + " of " + result.TotalTargets.ToString() + " prop files exported.");
 
@@ -898,10 +1491,17 @@ namespace CodeWalker.MloExporter
             ImportAllMloCheckBox.Enabled = (LoadedSelectionInfo != null) && !busy;
             RoomsCheckedListBox.Enabled = (LoadedSelectionInfo != null) && !ImportAllMloCheckBox.Checked && !busy;
             EntitySetsCheckedListBox.Enabled = (LoadedSelectionInfo != null) && !busy;
+            OpenYmapButton.Enabled = CacheReady && !busy;
+            ExportYmapButton.Enabled = CacheReady && (LoadedYmapSelectionInfo != null) && (LoadedYmapSelectionInfo.ExportableFiles > 0) && !busy;
+            ExportYmapTexturesCheckBox.Enabled = !busy;
+            OpenYmapFolderCheckBox.Enabled = !busy;
+            YmapAddonRpfTextBox.Enabled = !busy;
+            YmapFilesListBox.Enabled = !busy;
 
             if (busy)
             {
                 ExportProgressBar.Value = 0;
+                YmapExportProgressBar.Value = 0;
             }
 
             UpdateActivityVisualState();
@@ -920,6 +1520,10 @@ namespace CodeWalker.MloExporter
             RoomsCheckedListBox.Enabled = hasSelection && !ImportAllMloCheckBox.Checked && !ExportInProgress;
             EntitySetsCheckedListBox.Enabled = hasSelection && !ExportInProgress;
             ExportButton.Enabled = CacheReady && hasSelection && !ExportInProgress;
+
+            bool hasYmapSelection = LoadedYmapSelectionInfo != null;
+            OpenYmapButton.Enabled = CacheReady && !ExportInProgress;
+            ExportYmapButton.Enabled = CacheReady && hasYmapSelection && (LoadedYmapSelectionInfo.ExportableFiles > 0) && !ExportInProgress;
         }
 
         private void ImportAllMloCheckBox_CheckedChanged(object sender, EventArgs e)
@@ -941,15 +1545,27 @@ namespace CodeWalker.MloExporter
             }
 
             StatusLabel.Text = progress.Status ?? string.Empty;
+            YmapStatusLabel.Text = progress.Status ?? string.Empty;
+            UpdateProgressBarValue(ExportProgressBar, progress);
+            UpdateProgressBarValue(YmapExportProgressBar, progress);
+        }
+
+        private void UpdateProgressBarValue(ProgressBar progressBar, YtypPropExportProgress progress)
+        {
+            if ((progressBar == null) || (progress == null))
+            {
+                return;
+            }
+
             if (progress.Total > 0)
             {
-                ExportProgressBar.Style = ProgressBarStyle.Continuous;
-                ExportProgressBar.Value = Math.Max(0, Math.Min((progress.Current * 1000) / progress.Total, 1000));
+                progressBar.Style = ProgressBarStyle.Continuous;
+                progressBar.Value = Math.Max(0, Math.Min((progress.Current * 1000) / progress.Total, 1000));
             }
             else
             {
-                ExportProgressBar.Style = ProgressBarStyle.Marquee;
-                ExportProgressBar.MarqueeAnimationSpeed = 30;
+                progressBar.Style = ProgressBarStyle.Marquee;
+                progressBar.MarqueeAnimationSpeed = 30;
             }
         }
 
@@ -967,6 +1583,7 @@ namespace CodeWalker.MloExporter
             }
 
             StatusLabel.Text = text;
+            YmapStatusLabel.Text = text;
         }
 
         private void SetCacheStatus(string text)

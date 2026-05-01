@@ -29,7 +29,7 @@ $lib = Join-Path $root "lib"
 $img = Join-Path $root "img"
 $build = Join-Path $root "build"
 $release = Join-Path $build "Release"
-$packageVersion = "1.1.1"
+$packageVersion = "1.1.2"
 $packageName = "l2k_mloExtractor-$packageVersion-win64"
 $packageZip = Join-Path $build ($packageName + ".zip")
 

@@ -14,9 +14,9 @@ Without CodeWalker and its source foundation, this tool would not exist in its c
 **Base source:** DexyFex / CodeWalker  
 **Workflow and support:** Codex
 
-[PT-BR] Ferramenta para abrir arquivos `YTYP` ou `YTYP.XML` de MLO e exportar os props do interior com os arquivos e texturas relacionados, em uma estrutura mais pratica para workflow no Blender.
+[PT-BR] Ferramenta para abrir arquivos `YTYP` ou `YTYP.XML` de MLO, ou `YMAP` / `YMAP.XML` de exterior, e exportar os props com os arquivos e texturas relacionados, em uma estrutura mais pratica para workflow no Blender.
 
-[EN] Tool designed to open MLO `YTYP` or `YTYP.XML` files and export interior props together with all related files and textures in a Blender-friendly structure.
+[EN] Tool designed to open MLO `YTYP` or `YTYP.XML` files, or exterior `YMAP` / `YMAP.XML` files, and export props together with all related files and textures in a Blender-friendly structure.
 
 ---
 
@@ -57,6 +57,8 @@ This helps the tool resolve hashes correctly and locate addon props, avoiding mi
 
 - In some cases the initial load can take a while, especially when addon props are involved.
 - The tool attempts to locate external models and textures, including files inside `mods`.
+- The `YMAP EXTERIOR EXTRACTION` tab supports multiple YMAP files as one batch, deduplicates props, ignores YMAPs containing interiors, and exports the source YMAP XML files at the output root.
+- For addon props, the `Addon RPF` field can point to either an RPF/name in `mods` or a local addon folder. Local `.ytyp`, `.ydr`, `.ydd`, `.yft`, and `.ytd` files are considered before fallback lookups.
 - Shared textures are now cached per YTD during export to avoid reopening the same dictionary repeatedly.
 - Export output is saved next to the original file for easier organization.
 - If you see `prop archetypes could not be resolved` or `prop resources were not found`, it usually means some referenced content was not available in the loaded GTA, `mods`, or RPF data during extraction.
@@ -89,6 +91,8 @@ Isso ajuda a ferramenta a resolver corretamente os hashes e localizar os props a
 
 - Em alguns casos a primeira carga pode demorar um pouco, principalmente quando existem props addon.
 - A ferramenta tenta localizar modelos e texturas externas, inclusive dentro de `mods`.
+- A aba `YMAP EXTERIOR EXTRACTION` suporta multiplos YMAPs como um unico lote, remove props duplicados, ignora YMAPs com interior e exporta os XMLs dos YMAPs na raiz da saida.
+- Para props addon, o campo `Addon RPF` pode apontar tanto para um RPF/nome em `mods` quanto para uma pasta local do addon. Arquivos locais `.ytyp`, `.ydr`, `.ydd`, `.yft` e `.ytd` sao considerados antes dos fallbacks.
 - Texturas compartilhadas agora sao cacheadas por YTD durante a exportacao para evitar reabrir o mesmo dictionary varias vezes.
 - O resultado da exportacao e salvo ao lado do arquivo original para facilitar a organizacao.
 - Se aparecer `prop archetypes could not be resolved` ou `prop resources were not found`, normalmente isso significa que parte do conteudo referenciado nao estava disponivel no GTA, `mods` ou RPF carregado durante a extracao.

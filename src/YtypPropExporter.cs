@@ -23,6 +23,8 @@ namespace CodeWalker.Tools
     public sealed class YtypPropExportResult
     {
         public string ExportedYtypXmlFileName { get; set; }
+        public List<string> ExportedSourceXmlFileNames { get; } = new List<string>();
+        public List<string> IgnoredYmapNames { get; } = new List<string>();
         public int TotalTargets { get; set; }
         public int ExportedTargets { get; set; }
         public int ExportedTextures { get; set; }
@@ -60,6 +62,39 @@ namespace CodeWalker.Tools
         public HashSet<string> EntitySetKeys { get; } = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
     }
 
+    public sealed class YmapExteriorFileInfo
+    {
+        public string InputPath { get; set; }
+        public string FileName { get; set; }
+        public bool ContainsInterior { get; set; }
+        public int EntityCount { get; set; }
+
+        public bool IsExportable => !ContainsInterior && (EntityCount > 0);
+
+        public string Label
+        {
+            get
+            {
+                if (ContainsInterior)
+                {
+                    return FileName + " - This YMAP contains an interior > ignored";
+                }
+
+                return FileName + " - " + EntityCount.ToString(CultureInfo.InvariantCulture) + " exterior entit" + (EntityCount == 1 ? "y" : "ies");
+            }
+        }
+    }
+
+    public sealed class YmapExteriorSelectionInfo
+    {
+        public List<YmapExteriorFileInfo> Files { get; } = new List<YmapExteriorFileInfo>();
+
+        public int TotalFiles => Files.Count;
+        public int ExportableFiles => Files.Count(file => file.IsExportable);
+        public int IgnoredInteriorFiles => Files.Count(file => file.ContainsInterior);
+        public int TotalExteriorEntities => Files.Where(file => !file.ContainsInterior).Sum(file => file.EntityCount);
+    }
+
     public sealed class YtypPropExporter
     {
         public const string DrawableFolderName = "Drawable";
@@ -70,6 +105,9 @@ namespace CodeWalker.Tools
         private Dictionary<ulong, Texture> textureLookupCache;
         private Dictionary<uint, YtdFile> ytdFileCache;
         private HashSet<uint> missingYtdHashes;
+        private List<LocalAddonRoot> localAddonRoots;
+        private Dictionary<string, Dictionary<uint, string>> localFileIndexes;
+        private Dictionary<string, byte[]> localEntryData;
         private string preferredRpfFilter;
         private List<RpfFile> preferredRpfs;
         private HashSet<string> preferredRpfPaths;
@@ -82,6 +120,12 @@ namespace CodeWalker.Tools
             public RpfFileEntry Entry { get; set; }
             public List<Archetype> Archetypes { get; } = new List<Archetype>();
             public HashSet<uint> TextureDictHashes { get; } = new HashSet<uint>();
+        }
+
+        private sealed class LocalAddonRoot
+        {
+            public string Folder { get; set; }
+            public bool Recursive { get; set; }
         }
 
         public static bool SupportsInputPath(string path)
@@ -103,6 +147,27 @@ namespace CodeWalker.Tools
             }
 
             return name.EndsWith(".ytyp.xml", StringComparison.InvariantCultureIgnoreCase);
+        }
+
+        public static bool SupportsYmapInputPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var name = Path.GetFileName(path);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            if (name.EndsWith(".ymap", StringComparison.InvariantCultureIgnoreCase))
+            {
+                return true;
+            }
+
+            return name.EndsWith(".ymap.xml", StringComparison.InvariantCultureIgnoreCase);
         }
 
         public static string GetSuggestedOutputFolderName(string inputPath, string preferredName = null)
@@ -145,6 +210,49 @@ namespace CodeWalker.Tools
                 baseFolder = Environment.CurrentDirectory;
             }
             return Path.Combine(baseFolder, GetSuggestedOutputFolderName(inputPath, preferredName));
+        }
+
+        public static string GetSuggestedYmapOutputFolderPath(IEnumerable<string> inputPaths)
+        {
+            var firstInputPath = inputPaths?.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+            var baseFolder = string.IsNullOrWhiteSpace(firstInputPath)
+                ? Environment.CurrentDirectory
+                : Path.GetDirectoryName(Path.GetFullPath(firstInputPath));
+            if (string.IsNullOrWhiteSpace(baseFolder))
+            {
+                baseFolder = Environment.CurrentDirectory;
+            }
+
+            return Path.Combine(baseFolder, GetSuggestedYmapOutputFolderName(inputPaths));
+        }
+
+        public static string GetSuggestedYmapOutputFolderName(IEnumerable<string> inputPaths)
+        {
+            var paths = inputPaths?.Where(path => !string.IsNullOrWhiteSpace(path)).ToArray() ?? new string[0];
+            var firstName = paths.Length > 0 ? Path.GetFileName(paths[0]) : "export";
+            if (string.IsNullOrWhiteSpace(firstName))
+            {
+                firstName = "export";
+            }
+
+            if (firstName.EndsWith(".ymap.xml", StringComparison.InvariantCultureIgnoreCase))
+            {
+                firstName = firstName.Substring(0, firstName.Length - ".ymap.xml".Length);
+            }
+            else
+            {
+                firstName = Path.GetFileNameWithoutExtension(firstName);
+            }
+
+            if (paths.Length > 1)
+            {
+                firstName += " + " + (paths.Length - 1).ToString(CultureInfo.InvariantCulture);
+            }
+
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var clean = new string(firstName.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray()).Trim();
+            clean = string.IsNullOrWhiteSpace(clean) ? "export" : clean;
+            return "Ymap Exterior Extracted - " + clean;
         }
 
         public YtypPropSelectionInfo LoadSelectionInfo(string inputPath)
@@ -281,6 +389,118 @@ namespace CodeWalker.Tools
                 PreloadTextureDictionaries(fileCache, targets.Values.SelectMany(target => BuildTextureDictHashCandidates(fileCache, target)));
             }
 
+            ExportResolvedTargets(fileCache, drawableOutputFolder, includeTextures, targets, result, progress, status);
+
+            ReportProgress(status, progress, "Export complete. " + result.ExportedTargets.ToString() + "/" + result.TotalTargets.ToString() + " prop files exported.", result.TotalTargets, result.TotalTargets);
+            return result;
+        }
+
+        public YmapExteriorSelectionInfo LoadYmapExteriorSelectionInfo(IEnumerable<string> inputPaths)
+        {
+            var paths = ValidateYmapInputPaths(inputPaths);
+            var selectionInfo = new YmapExteriorSelectionInfo();
+
+            foreach (var inputPath in paths)
+            {
+                var ymap = LoadYmapForExport(inputPath);
+                var entities = GetYmapEntityDefs(ymap).ToArray();
+                selectionInfo.Files.Add(new YmapExteriorFileInfo()
+                {
+                    InputPath = inputPath,
+                    FileName = Path.GetFileName(inputPath),
+                    ContainsInterior = HasYmapInterior(ymap),
+                    EntityCount = entities.Length
+                });
+            }
+
+            return selectionInfo;
+        }
+
+        public YtypPropExportResult ExportYmapExterior(GameFileCache fileCache, IEnumerable<string> inputPaths, string outputFolder, bool includeTextures, string preferredRpfName, Action<YtypPropExportProgress> progress = null, Action<string> status = null, int cacheWaitTimeoutMs = 60000)
+        {
+            if (fileCache == null)
+            {
+                throw new ArgumentNullException(nameof(fileCache));
+            }
+
+            var paths = ValidateYmapInputPaths(inputPaths);
+            Directory.CreateDirectory(outputFolder);
+            ResetRuntimeCaches();
+
+            ReportProgress(status, progress, "Waiting for file cache...");
+            fileCache = WaitForFileCacheReady(fileCache, cacheWaitTimeoutMs);
+            if (fileCache == null)
+            {
+                throw new Exception("Game file cache isn't ready yet. Please wait for the GTA files to finish loading and try again.");
+            }
+
+            ConfigurePreferredRpfScope(fileCache, preferredRpfName);
+            ConfigureLocalAddonRoots(paths, preferredRpfName);
+
+            var result = new YtypPropExportResult();
+            var targets = new Dictionary<string, ExportTarget>(StringComparer.InvariantCultureIgnoreCase);
+            var ymapArchetypes = new Dictionary<uint, Archetype>();
+            var missingYmapArchetypes = new HashSet<uint>();
+            var allYmapEntities = new List<CEntityDef>();
+
+            int sourceIndex = 0;
+            foreach (var inputPath in paths)
+            {
+                sourceIndex++;
+                var sourceName = Path.GetFileName(inputPath);
+                ReportProgress(status, progress, "Loading YMAP " + sourceIndex.ToString(CultureInfo.InvariantCulture) + "/" + paths.Length.ToString(CultureInfo.InvariantCulture) + ": " + sourceName + "...", sourceIndex, paths.Length);
+
+                var ymap = LoadYmapForExport(inputPath);
+                if (HasYmapInterior(ymap))
+                {
+                    result.IgnoredYmapNames.Add(sourceName + " - This YMAP contains an interior > ignored");
+                    continue;
+                }
+
+                ReportProgress(status, progress, "Exporting YMAP XML: " + sourceName + "...");
+                result.ExportedSourceXmlFileNames.Add(ExportYmapXml(ymap, inputPath, outputFolder, result.ExportedSourceXmlFileNames));
+
+                var ymapEntities = GetYmapEntityDefs(ymap).ToArray();
+                allYmapEntities.AddRange(ymapEntities);
+            }
+
+            if (result.ExportedSourceXmlFileNames.Count == 0)
+            {
+                throw new Exception("All selected YMAP files were ignored because they contain interiors.");
+            }
+
+            ReportProgress(status, progress, "Building unique prop list from selected YMAPs...");
+            ResolveYmapArchetypes(fileCache, allYmapEntities, ymapArchetypes, missingYmapArchetypes, "selected YMAPs", progress, status);
+            AddYmapPropTargets(allYmapEntities, ymapArchetypes, fileCache, targets, result, progress, status);
+
+            result.TotalTargets = targets.Count;
+            if (targets.Count == 0)
+            {
+                throw new Exception(BuildNoPropTargetsMessage("No prop resource files were found in the selected exterior YMAP entities.", result));
+            }
+
+            var drawableOutputFolder = GetDrawableOutputFolderPath(outputFolder);
+            Directory.CreateDirectory(drawableOutputFolder);
+
+            if (includeTextures)
+            {
+                var textureDictHashes = targets.Values
+                    .SelectMany(target => BuildTextureDictHashCandidates(fileCache, target))
+                    .Where(hash => hash != 0)
+                    .Distinct()
+                    .ToArray();
+                ReportProgress(status, progress, "Caching " + textureDictHashes.Length.ToString(CultureInfo.InvariantCulture) + " unique texture dictionaries...");
+                PreloadTextureDictionaries(fileCache, textureDictHashes);
+            }
+
+            ExportResolvedTargets(fileCache, drawableOutputFolder, includeTextures, targets, result, progress, status);
+
+            ReportProgress(status, progress, "Exterior YMAP export complete. " + result.ExportedTargets.ToString() + "/" + result.TotalTargets.ToString() + " prop files exported.", result.TotalTargets, result.TotalTargets);
+            return result;
+        }
+
+        private void ExportResolvedTargets(GameFileCache fileCache, string drawableOutputFolder, bool includeTextures, Dictionary<string, ExportTarget> targets, YtypPropExportResult result, Action<YtypPropExportProgress> progress, Action<string> status)
+        {
             ReportProgress(status, progress, "Found " + targets.Count.ToString() + " prop files to export.", 0, targets.Count);
 
             int current = 0;
@@ -298,7 +518,7 @@ namespace CodeWalker.Tools
 
                 try
                 {
-                    var data = entry.File?.ExtractFile(entry);
+                    var data = ExtractEntryData(entry);
                     if (data == null)
                     {
                         result.Errors.Add("Unable to extract " + entry.Path);
@@ -332,9 +552,39 @@ namespace CodeWalker.Tools
                     result.Errors.Add(entry.Name + ": " + ex.Message);
                 }
             }
+        }
 
-            ReportProgress(status, progress, "Export complete. " + result.ExportedTargets.ToString() + "/" + result.TotalTargets.ToString() + " prop files exported.", result.TotalTargets, result.TotalTargets);
-            return result;
+        private byte[] ExtractEntryData(RpfFileEntry entry)
+        {
+            if (entry == null)
+            {
+                return null;
+            }
+
+            var data = entry.File?.ExtractFile(entry);
+            if (data != null)
+            {
+                return data;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.Path) && File.Exists(entry.Path))
+            {
+                if ((localEntryData != null) && localEntryData.TryGetValue(entry.Path, out var localData))
+                {
+                    return localData;
+                }
+
+                var fileData = File.ReadAllBytes(entry.Path);
+                CreateFileEntry(Path.GetFileName(entry.Path), entry.Path, ref fileData);
+                if (localEntryData != null)
+                {
+                    localEntryData[entry.Path] = fileData;
+                }
+
+                return fileData;
+            }
+
+            return null;
         }
 
         private void ReportProgress(Action<string> status, Action<YtypPropExportProgress> progress, string message, int current = 0, int total = 0)
@@ -346,6 +596,54 @@ namespace CodeWalker.Tools
                 Current = current,
                 Total = total
             });
+        }
+
+        private string BuildNoPropTargetsMessage(string message, YtypPropExportResult result)
+        {
+            if (result == null)
+            {
+                return message;
+            }
+
+            var sb = new StringBuilder(message);
+            if (result.MissingArchetypes > 0)
+            {
+                sb.AppendLine();
+                sb.Append(result.MissingArchetypes.ToString(CultureInfo.InvariantCulture));
+                sb.Append(" archetype(s) could not be resolved.");
+                AppendFirstDebugNames(sb, result.MissingArchetypeNames);
+            }
+
+            if (result.MissingResources > 0)
+            {
+                sb.AppendLine();
+                sb.Append(result.MissingResources.ToString(CultureInfo.InvariantCulture));
+                sb.Append(" archetype(s) had no drawable/fragment resource.");
+                AppendFirstDebugNames(sb, result.MissingResourceNames);
+            }
+
+            return sb.ToString();
+        }
+
+        private void AppendFirstDebugNames(StringBuilder sb, IEnumerable<string> names)
+        {
+            if (sb == null || names == null)
+            {
+                return;
+            }
+
+            var firstNames = names
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.InvariantCultureIgnoreCase)
+                .Take(5)
+                .ToArray();
+            if (firstNames.Length == 0)
+            {
+                return;
+            }
+
+            sb.Append(" First: ");
+            sb.Append(string.Join(", ", firstNames));
         }
 
         private void ValidateInputPath(string inputPath)
@@ -362,6 +660,34 @@ namespace CodeWalker.Tools
             {
                 throw new InvalidOperationException("Only .ytyp and .ytyp.xml inputs are supported.");
             }
+        }
+
+        private string[] ValidateYmapInputPaths(IEnumerable<string> inputPaths)
+        {
+            var paths = inputPaths?
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => Path.GetFullPath(path))
+                .Distinct(StringComparer.InvariantCultureIgnoreCase)
+                .ToArray();
+
+            if ((paths == null) || (paths.Length == 0))
+            {
+                throw new ArgumentException("At least one YMAP input path is required.", nameof(inputPaths));
+            }
+
+            foreach (var inputPath in paths)
+            {
+                if (!File.Exists(inputPath))
+                {
+                    throw new FileNotFoundException("The selected YMAP file could not be found.", inputPath);
+                }
+                if (!SupportsYmapInputPath(inputPath))
+                {
+                    throw new InvalidOperationException("Only .ymap and .ymap.xml inputs are supported.");
+                }
+            }
+
+            return paths;
         }
 
         private GameFileCache WaitForFileCacheReady(GameFileCache fileCache, int timeoutMs)
@@ -414,6 +740,53 @@ namespace CodeWalker.Tools
 
             var entry = CreateFileEntry(fileName, filePath, ref data);
             return RpfFile.GetFile<YtypFile>(entry, data);
+        }
+
+        private YmapFile LoadYmapForExport(string inputPath)
+        {
+            byte[] data;
+            string fileName;
+            string filePath;
+            if (inputPath.EndsWith(".xml", StringComparison.InvariantCultureIgnoreCase))
+            {
+                var xmlName = Path.GetFileName(inputPath);
+                var xmlNameLower = xmlName.ToLowerInvariant();
+                int trimLength = 4;
+                var metaFormat = XmlMeta.GetXMLFormat(xmlNameLower, out trimLength);
+
+                fileName = xmlName.Substring(0, xmlName.Length - trimLength);
+                filePath = Path.Combine(Path.GetDirectoryName(inputPath), fileName);
+                var resourceHintPath = Path.Combine(Path.GetDirectoryName(filePath), Path.GetFileNameWithoutExtension(filePath));
+
+                var doc = new XmlDocument();
+                doc.LoadXml(File.ReadAllText(inputPath));
+                data = XmlMeta.GetData(doc, metaFormat, resourceHintPath);
+
+                if (data == null)
+                {
+                    throw new Exception("The XML schema is not supported for YMAP import.");
+                }
+            }
+            else
+            {
+                fileName = Path.GetFileName(inputPath);
+                filePath = inputPath;
+                data = File.ReadAllBytes(inputPath);
+            }
+
+            if (!fileName.EndsWith(".ymap", StringComparison.InvariantCultureIgnoreCase))
+            {
+                throw new Exception("Only YMAP inputs are supported.");
+            }
+
+            var entry = CreateFileEntry(fileName, filePath, ref data);
+            var ymap = RpfFile.GetFile<YmapFile>(entry, data);
+            if (ymap == null)
+            {
+                throw new Exception("Unable to load the selected YMAP.");
+            }
+
+            return ymap;
         }
 
         private RpfFileEntry CreateFileEntry(string name, string path, ref byte[] data)
@@ -528,6 +901,67 @@ namespace CodeWalker.Tools
             }
 
             return matches;
+        }
+
+        private void ConfigureLocalAddonRoots(IEnumerable<string> inputPaths, string preferredPath)
+        {
+            var roots = new List<LocalAddonRoot>();
+
+            if (!string.IsNullOrWhiteSpace(preferredPath))
+            {
+                var expandedPreferredPath = Environment.ExpandEnvironmentVariables(preferredPath.Trim().Trim('"'));
+                if (Directory.Exists(expandedPreferredPath))
+                {
+                    AddLocalAddonRoot(roots, expandedPreferredPath, true);
+                }
+                else if (File.Exists(expandedPreferredPath) && !expandedPreferredPath.EndsWith(".rpf", StringComparison.InvariantCultureIgnoreCase))
+                {
+                    AddLocalAddonRoot(roots, Path.GetDirectoryName(expandedPreferredPath), true);
+                }
+            }
+
+            foreach (var inputPath in inputPaths ?? Enumerable.Empty<string>())
+            {
+                var inputFolder = Path.GetDirectoryName(inputPath);
+                if (string.IsNullOrWhiteSpace(inputFolder))
+                {
+                    continue;
+                }
+
+                AddLocalAddonRoot(roots, inputFolder, false);
+
+                var folderName = Path.GetFileName(inputFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                if (string.Equals(folderName, "ymap", StringComparison.InvariantCultureIgnoreCase)
+                    || string.Equals(folderName, "maps", StringComparison.InvariantCultureIgnoreCase)
+                    || string.Equals(folderName, "stream", StringComparison.InvariantCultureIgnoreCase))
+                {
+                    AddLocalAddonRoot(roots, Path.GetDirectoryName(inputFolder), true);
+                }
+            }
+
+            localAddonRoots = roots;
+        }
+
+        private void AddLocalAddonRoot(List<LocalAddonRoot> roots, string folder, bool recursive)
+        {
+            if ((roots == null) || string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+            {
+                return;
+            }
+
+            var fullPath = Path.GetFullPath(folder);
+            var existing = roots.FirstOrDefault(root => string.Equals(root.Folder, fullPath, StringComparison.InvariantCultureIgnoreCase));
+            if (existing != null)
+            {
+                existing.Recursive = existing.Recursive || recursive;
+                return;
+            }
+
+            roots.Add(new LocalAddonRoot()
+            {
+                Folder = fullPath,
+                Recursive = recursive
+            });
         }
 
         private bool DoesRpfMatchPreferredFilter(RpfFile rpf, string filter)
@@ -708,6 +1142,228 @@ namespace CodeWalker.Tools
                     if ((hash != 0) && !lookup.ContainsKey(hash))
                     {
                         lookup[hash] = archetype;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private void ResolveYmapArchetypes(GameFileCache fileCache, IEnumerable<CEntityDef> entities, Dictionary<uint, Archetype> lookup, HashSet<uint> knownMissing, string sourceName, Action<YtypPropExportProgress> progress, Action<string> status)
+        {
+            if ((fileCache == null) || (entities == null) || (lookup == null))
+            {
+                return;
+            }
+
+            var neededHashes = entities
+                .Select(entity => (uint)entity.archetypeName)
+                .Where(hash => hash != 0)
+                .Distinct()
+                .Where(hash => !lookup.ContainsKey(hash))
+                .Where(hash => (knownMissing == null) || !knownMissing.Contains(hash))
+                .ToArray();
+
+            if (neededHashes.Length == 0)
+            {
+                return;
+            }
+
+            var unresolved = new HashSet<uint>(neededHashes);
+            foreach (var hash in neededHashes)
+            {
+                var cachedArchetype = HasPreferredRpfScope ? FilterArchetypeByScope(fileCache.GetArchetype(hash)) : fileCache.GetArchetype(hash);
+                if (cachedArchetype == null)
+                {
+                    continue;
+                }
+
+                lookup[hash] = cachedArchetype;
+                unresolved.Remove(hash);
+            }
+
+            if (unresolved.Count > 0)
+            {
+                ScanLocalYtypArchetypesForHashes(
+                    unresolved,
+                    lookup,
+                    "Resolving local addon YTYP archetypes for " + sourceName,
+                    progress,
+                    status);
+            }
+
+            if (unresolved.Count > 0)
+            {
+                ScanYtypArchetypesForHashes(
+                    fileCache,
+                    EnumerateScopedModRpfs(fileCache),
+                    unresolved,
+                    lookup,
+                    "Resolving addon YTYP archetypes for " + sourceName,
+                    progress,
+                    status);
+            }
+
+            if (knownMissing != null)
+            {
+                foreach (var hash in unresolved)
+                {
+                    knownMissing.Add(hash);
+                }
+            }
+        }
+
+        private void ScanYtypArchetypesForHashes(GameFileCache fileCache, IEnumerable<RpfFile> rpfs, HashSet<uint> unresolved, Dictionary<uint, Archetype> lookup, string message, Action<YtypPropExportProgress> progress, Action<string> status)
+        {
+            if ((fileCache?.RpfMan == null) || (unresolved == null) || (unresolved.Count == 0) || (lookup == null))
+            {
+                return;
+            }
+
+            var ytypEntries = EnumerateYtypEntries(rpfs).ToArray();
+            for (int i = 0; i < ytypEntries.Length; i++)
+            {
+                if (unresolved.Count == 0)
+                {
+                    break;
+                }
+
+                ReportProgress(status, progress, message + " (" + (i + 1).ToString(CultureInfo.InvariantCulture) + "/" + ytypEntries.Length.ToString(CultureInfo.InvariantCulture) + ")...", i + 1, ytypEntries.Length);
+                TryAddMatchingArchetypesFromYtypEntry(fileCache, ytypEntries[i], unresolved, lookup);
+            }
+        }
+
+        private void ScanLocalYtypArchetypesForHashes(HashSet<uint> unresolved, Dictionary<uint, Archetype> lookup, string message, Action<YtypPropExportProgress> progress, Action<string> status)
+        {
+            if ((unresolved == null) || (unresolved.Count == 0) || (lookup == null))
+            {
+                return;
+            }
+
+            var ytypPaths = EnumerateLocalAddonFiles(".ytyp", ".ytyp.xml").ToArray();
+            for (int i = 0; i < ytypPaths.Length; i++)
+            {
+                if (unresolved.Count == 0)
+                {
+                    break;
+                }
+
+                ReportProgress(status, progress, message + " (" + (i + 1).ToString(CultureInfo.InvariantCulture) + "/" + ytypPaths.Length.ToString(CultureInfo.InvariantCulture) + ")...", i + 1, ytypPaths.Length);
+                TryAddMatchingArchetypesFromLocalYtyp(ytypPaths[i], unresolved, lookup);
+            }
+        }
+
+        private void TryAddMatchingArchetypesFromLocalYtyp(string path, HashSet<uint> unresolved, Dictionary<uint, Archetype> lookup)
+        {
+            if (string.IsNullOrWhiteSpace(path) || (unresolved == null) || (unresolved.Count == 0) || (lookup == null))
+            {
+                return;
+            }
+
+            try
+            {
+                var ytyp = LoadYtypForExport(path);
+                if (ytyp?.AllArchetypes == null)
+                {
+                    return;
+                }
+
+                foreach (var archetype in ytyp.AllArchetypes)
+                {
+                    if (archetype == null)
+                    {
+                        continue;
+                    }
+
+                    uint hash = archetype.Hash;
+                    if ((hash != 0) && unresolved.Remove(hash))
+                    {
+                        lookup[hash] = archetype;
+                        if (unresolved.Count == 0)
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private IEnumerable<RpfFileEntry> EnumerateYtypEntries(IEnumerable<RpfFile> rpfs)
+        {
+            var scanned = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+            if (rpfs == null)
+            {
+                yield break;
+            }
+
+            foreach (var rpf in rpfs)
+            {
+                if (rpf == null)
+                {
+                    continue;
+                }
+
+                var scanKey = NormalizeScopeValue(rpf.Path) ?? NormalizeScopeValue(rpf.FilePath) ?? string.Empty;
+                if (!scanned.Add(scanKey))
+                {
+                    continue;
+                }
+
+                var entries = rpf.AllEntries;
+                if (entries == null)
+                {
+                    continue;
+                }
+
+                foreach (var entry in entries)
+                {
+                    if (!(entry is RpfFileEntry fileEntry))
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(Path.GetExtension(fileEntry.NameLower ?? string.Empty), ".ytyp", StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        yield return fileEntry;
+                    }
+                }
+            }
+        }
+
+        private void TryAddMatchingArchetypesFromYtypEntry(GameFileCache fileCache, RpfFileEntry entry, HashSet<uint> unresolved, Dictionary<uint, Archetype> lookup)
+        {
+            if ((fileCache?.RpfMan == null) || (entry == null) || (unresolved == null) || (unresolved.Count == 0) || (lookup == null))
+            {
+                return;
+            }
+
+            try
+            {
+                var ytyp = fileCache.RpfMan.GetFile<YtypFile>(entry);
+                if (ytyp?.AllArchetypes == null)
+                {
+                    return;
+                }
+
+                foreach (var archetype in ytyp.AllArchetypes)
+                {
+                    if (archetype == null)
+                    {
+                        continue;
+                    }
+
+                    uint hash = archetype.Hash;
+                    if ((hash != 0) && unresolved.Remove(hash))
+                    {
+                        lookup[hash] = archetype;
+                        if (unresolved.Count == 0)
+                        {
+                            return;
+                        }
                     }
                 }
             }
@@ -1044,6 +1700,66 @@ namespace CodeWalker.Tools
             }
         }
 
+        private void AddYmapPropTargets(IEnumerable<CEntityDef> entities, Dictionary<uint, Archetype> localArchetypes, GameFileCache fileCache, Dictionary<string, ExportTarget> targets, YtypPropExportResult result, Action<YtypPropExportProgress> progress, Action<string> status)
+        {
+            if (entities == null)
+            {
+                return;
+            }
+
+            var entityArray = entities.ToArray();
+            foreach (var entity in entityArray)
+            {
+                uint archetypeHash = entity.archetypeName;
+                if (archetypeHash == 0)
+                {
+                    result.MissingArchetypes++;
+                    AddMissingArchetypeName(result, archetypeHash);
+                }
+            }
+
+            var archetypeHashes = entityArray
+                .Select(entity => (uint)entity.archetypeName)
+                .Where(hash => hash != 0)
+                .Distinct()
+                .ToArray();
+
+            for (int i = 0; i < archetypeHashes.Length; i++)
+            {
+                uint archetypeHash = archetypeHashes[i];
+                ReportProgress(status, progress, "Resolving YMAP prop resource " + (i + 1).ToString(CultureInfo.InvariantCulture) + "/" + archetypeHashes.Length.ToString(CultureInfo.InvariantCulture) + "...", i + 1, archetypeHashes.Length);
+
+                var archetype = ResolveYmapArchetypeForExport(archetypeHash, localArchetypes, fileCache);
+                if (archetype == null)
+                {
+                    result.MissingArchetypes++;
+                    AddMissingArchetypeName(result, archetypeHash);
+                }
+
+                var entry = GetExportEntryForArchetype(fileCache, archetype, archetypeHash);
+                if (entry == null)
+                {
+                    result.MissingResources++;
+                    AddMissingResourceName(result, archetype, archetypeHash);
+                    continue;
+                }
+
+                var key = entry.Path ?? entry.Name ?? (archetype?.Name ?? archetypeHash.ToString("X8"));
+                if (!targets.TryGetValue(key, out var target))
+                {
+                    target = new ExportTarget() { Entry = entry };
+                    targets[key] = target;
+                }
+
+                if ((archetype != null) && !target.Archetypes.Any(a => AreEquivalentExportArchetypes(a, archetype)))
+                {
+                    target.Archetypes.Add(archetype);
+                }
+
+                AddTextureDictHashes(target, archetype, archetypeHash);
+            }
+        }
+
         private Archetype ResolveArchetypeForExport(MCEntityDef entity, Dictionary<uint, Archetype> localArchetypes, GameFileCache fileCache)
         {
             if (entity == null)
@@ -1058,6 +1774,27 @@ namespace CodeWalker.Tools
             }
 
             return GetScopedArchetype(fileCache, hash);
+        }
+
+        private Archetype ResolveYmapArchetypeForExport(uint hash, Dictionary<uint, Archetype> localArchetypes, GameFileCache fileCache)
+        {
+            if (hash == 0)
+            {
+                return null;
+            }
+
+            if ((localArchetypes != null) && localArchetypes.TryGetValue(hash, out var localArchetype))
+            {
+                return localArchetype;
+            }
+
+            var cachedArchetype = HasPreferredRpfScope ? FilterArchetypeByScope(fileCache?.GetArchetype(hash)) : fileCache?.GetArchetype(hash);
+            if (cachedArchetype != null)
+            {
+                return cachedArchetype;
+            }
+
+            return HasPreferredRpfScope ? FindNoModArchetypeByHash(fileCache, hash) : null;
         }
 
         private void AddMissingArchetypeName(YtypPropExportResult result, uint hash)
@@ -1137,6 +1874,18 @@ namespace CodeWalker.Tools
                         return yddEntry;
                     }
 
+                    yddEntry = FindLocalEntryByHash(drawableDictHash, ".ydd");
+                    if (yddEntry != null)
+                    {
+                        return yddEntry;
+                    }
+
+                    yddEntry = FindEntryNearArchetype(archetype, drawableDictHash, ".ydd");
+                    if (yddEntry != null)
+                    {
+                        return yddEntry;
+                    }
+
                     yddEntry = FindEntryByHash(fileCache, drawableDictHash, ".ydd");
                     if (yddEntry != null)
                     {
@@ -1159,6 +1908,18 @@ namespace CodeWalker.Tools
                 return null;
             }
 
+            var localEntry = FindLocalEntryByHash(hash, ".ydr", ".yft", ".ydd");
+            if (localEntry != null)
+            {
+                return localEntry;
+            }
+
+            var nearbyEntry = FindEntryNearArchetype(archetype, hash, ".ydr", ".yft", ".ydd");
+            if (nearbyEntry != null)
+            {
+                return nearbyEntry;
+            }
+
             return GetExportEntryForHash(fileCache, hash);
         }
 
@@ -1169,7 +1930,8 @@ namespace CodeWalker.Tools
                 return null;
             }
 
-            return FilterEntryByScope(fileCache.GetYdrEntry(hash))
+            return FindLocalEntryByHash(hash, ".ydr", ".yft", ".ydd")
+                ?? FilterEntryByScope(fileCache.GetYdrEntry(hash))
                 ?? FilterEntryByScope(fileCache.GetYftEntry(hash))
                 ?? FilterEntryByScope(fileCache.GetYddEntry(hash))
                 ?? FindEntryByHash(fileCache, hash, ".ydr", ".yft", ".ydd");
@@ -1233,6 +1995,193 @@ namespace CodeWalker.Tools
 
             return null;
         }
+
+        private RpfFileEntry FindEntryNearArchetype(Archetype archetype, uint hash, params string[] extensions)
+        {
+            if ((archetype?.Ytyp?.RpfFileEntry?.File == null) || (hash == 0) || (extensions == null) || (extensions.Length == 0))
+            {
+                return null;
+            }
+
+            var extSet = new HashSet<string>(extensions, StringComparer.InvariantCultureIgnoreCase);
+            var scanned = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+            var sourceRpf = archetype.Ytyp.RpfFileEntry.File;
+            foreach (var rpf in new[] { sourceRpf, sourceRpf.GetTopParent() })
+            {
+                if (rpf == null)
+                {
+                    continue;
+                }
+
+                var key = NormalizeScopeValue(rpf.Path) ?? NormalizeScopeValue(rpf.FilePath) ?? string.Empty;
+                if (!scanned.Add(key))
+                {
+                    continue;
+                }
+
+                var entry = FindEntryByHash(rpf, hash, extSet);
+                if (entry != null)
+                {
+                    return FilterEntryByScope(entry);
+                }
+            }
+
+            return null;
+        }
+
+        private RpfFileEntry FindLocalEntryByHash(uint hash, params string[] extensions)
+        {
+            if ((hash == 0) || (extensions == null) || (extensions.Length == 0))
+            {
+                return null;
+            }
+
+            var path = FindLocalFileByHash(hash, extensions);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            return CreateLocalFileEntry(path);
+        }
+
+        private string FindLocalFileByHash(uint hash, params string[] extensions)
+        {
+            if ((hash == 0) || (extensions == null) || (extensions.Length == 0))
+            {
+                return null;
+            }
+
+            var index = GetOrBuildLocalFileIndex(extensions);
+            return index.TryGetValue(hash, out var path) ? path : null;
+        }
+
+        private RpfFileEntry CreateLocalFileEntry(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return null;
+            }
+
+            try
+            {
+                var data = File.ReadAllBytes(path);
+                var entry = CreateFileEntry(Path.GetFileName(path), path, ref data);
+                if (localEntryData != null)
+                {
+                    localEntryData[path] = data;
+                }
+
+                return entry;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private Dictionary<uint, string> GetOrBuildLocalFileIndex(params string[] extensions)
+        {
+            var key = BuildExtensionKey(extensions);
+            if ((localFileIndexes != null) && localFileIndexes.TryGetValue(key, out var cachedIndex))
+            {
+                return cachedIndex;
+            }
+
+            if (localFileIndexes == null)
+            {
+                localFileIndexes = new Dictionary<string, Dictionary<uint, string>>(StringComparer.InvariantCultureIgnoreCase);
+            }
+
+            var index = new Dictionary<uint, string>();
+            foreach (var path in EnumerateLocalAddonFiles(extensions))
+            {
+                AddLocalFileIndexValue(index, path);
+            }
+
+            localFileIndexes[key] = index;
+            return index;
+        }
+
+        private string BuildExtensionKey(params string[] extensions)
+        {
+            return string.Join("|", (extensions ?? new string[0]).Select(extension => extension.ToLowerInvariant()).OrderBy(extension => extension, StringComparer.InvariantCultureIgnoreCase));
+        }
+
+        private IEnumerable<string> EnumerateLocalAddonFiles(params string[] extensions)
+        {
+            if ((localAddonRoots == null) || (localAddonRoots.Count == 0) || (extensions == null) || (extensions.Length == 0))
+            {
+                yield break;
+            }
+
+            var extSet = new HashSet<string>(extensions, StringComparer.InvariantCultureIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+            foreach (var root in localAddonRoots)
+            {
+                if ((root == null) || string.IsNullOrWhiteSpace(root.Folder) || !Directory.Exists(root.Folder))
+                {
+                    continue;
+                }
+
+                IEnumerable<string> files;
+                try
+                {
+                    files = Directory.EnumerateFiles(root.Folder, "*.*", root.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (var path in files)
+                {
+                    var fileName = Path.GetFileName(path);
+                    var extension = Path.GetExtension(fileName ?? string.Empty);
+                    var isYtypXml = fileName?.EndsWith(".ytyp.xml", StringComparison.InvariantCultureIgnoreCase) ?? false;
+                    if (!extSet.Contains(extension) && !(isYtypXml && extSet.Contains(".ytyp.xml")))
+                    {
+                        continue;
+                    }
+
+                    if (seen.Add(path))
+                    {
+                        yield return path;
+                    }
+                }
+            }
+        }
+
+        private void AddLocalFileIndexValue(Dictionary<uint, string> index, string path)
+        {
+            if ((index == null) || string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            var fileName = Path.GetFileName(path)?.ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return;
+            }
+
+            var shortName = Path.GetFileNameWithoutExtension(fileName);
+            AddLocalFileIndexHash(index, JenkHash.GenHash(shortName), path);
+            AddLocalFileIndexHash(index, JenkHash.GenHash(fileName), path);
+            if (TryParseHashedFileName(shortName, out var parsedHash))
+            {
+                AddLocalFileIndexHash(index, parsedHash, path);
+            }
+        }
+
+        private void AddLocalFileIndexHash(Dictionary<uint, string> index, uint hash, string path)
+        {
+            if ((hash != 0) && !index.ContainsKey(hash))
+            {
+                index[hash] = path;
+            }
+        }
+
         private void ResetRuntimeCaches()
         {
             drawableEntryIndex = null;
@@ -1241,6 +2190,9 @@ namespace CodeWalker.Tools
             textureLookupCache = new Dictionary<ulong, Texture>();
             ytdFileCache = new Dictionary<uint, YtdFile>();
             missingYtdHashes = new HashSet<uint>();
+            localAddonRoots = null;
+            localFileIndexes = new Dictionary<string, Dictionary<uint, string>>(StringComparer.InvariantCultureIgnoreCase);
+            localEntryData = new Dictionary<string, byte[]>(StringComparer.InvariantCultureIgnoreCase);
             preferredRpfFilter = null;
             preferredRpfs = null;
             preferredRpfPaths = null;
@@ -1437,6 +2389,35 @@ namespace CodeWalker.Tools
                 && ((uint)left.DrawableDict == (uint)right.DrawableDict);
         }
 
+        private bool HasYmapInterior(YmapFile ymap)
+        {
+            return (ymap?.CMloInstanceDefs != null) && (ymap.CMloInstanceDefs.Length > 0);
+        }
+
+        private IEnumerable<CEntityDef> GetYmapEntityDefs(YmapFile ymap)
+        {
+            if (ymap?.CEntityDefs != null)
+            {
+                return ymap.CEntityDefs;
+            }
+
+            if (ymap?.AllEntities == null)
+            {
+                return Enumerable.Empty<CEntityDef>();
+            }
+
+            var entities = new List<CEntityDef>();
+            foreach (var entity in ymap.AllEntities)
+            {
+                if (entity != null)
+                {
+                    entities.Add(entity.CEntityDef);
+                }
+            }
+
+            return entities;
+        }
+
         private string ExportYtypXml(YtypFile ytyp, string inputPath, string outputFolder)
         {
             var xml = MetaXml.GetXml(ytyp, out var _);
@@ -1469,6 +2450,69 @@ namespace CodeWalker.Tools
             }
 
             return Path.GetFileNameWithoutExtension(fileName) + ".ytyp.xml";
+        }
+
+        private string ExportYmapXml(YmapFile ymap, string inputPath, string outputFolder, ICollection<string> usedFileNames)
+        {
+            var xml = MetaXml.GetXml(ymap, out var _);
+            if (string.IsNullOrWhiteSpace(xml))
+            {
+                throw new Exception("Unable to convert the source YMAP to XML.");
+            }
+
+            var fileName = MakeUniqueOutputFileName(GetExportedYmapXmlFileName(inputPath), outputFolder, usedFileNames);
+            File.WriteAllText(Path.Combine(outputFolder, fileName), xml);
+            return fileName;
+        }
+
+        private string GetExportedYmapXmlFileName(string inputPath)
+        {
+            var fileName = Path.GetFileName(inputPath);
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return "export.ymap.xml";
+            }
+
+            if (fileName.EndsWith(".ymap.xml", StringComparison.InvariantCultureIgnoreCase))
+            {
+                return fileName;
+            }
+
+            if (fileName.EndsWith(".ymap", StringComparison.InvariantCultureIgnoreCase))
+            {
+                return fileName + ".xml";
+            }
+
+            return Path.GetFileNameWithoutExtension(fileName) + ".ymap.xml";
+        }
+
+        private string MakeUniqueOutputFileName(string fileName, string outputFolder, ICollection<string> usedFileNames)
+        {
+            var used = usedFileNames ?? new List<string>();
+            var candidate = fileName;
+            var baseName = fileName;
+            var extension = string.Empty;
+            const string ymapXmlExtension = ".ymap.xml";
+
+            if (fileName.EndsWith(ymapXmlExtension, StringComparison.InvariantCultureIgnoreCase))
+            {
+                baseName = fileName.Substring(0, fileName.Length - ymapXmlExtension.Length);
+                extension = ymapXmlExtension;
+            }
+            else
+            {
+                baseName = Path.GetFileNameWithoutExtension(fileName);
+                extension = Path.GetExtension(fileName);
+            }
+
+            int index = 2;
+            while (used.Contains(candidate) || File.Exists(Path.Combine(outputFolder, candidate)))
+            {
+                candidate = baseName + "_" + index.ToString(CultureInfo.InvariantCulture) + extension;
+                index++;
+            }
+
+            return candidate;
         }
 
         private static string GetDrawableOutputFolderPath(string outputFolder)
@@ -1537,6 +2581,29 @@ namespace CodeWalker.Tools
             }
 
             var extension = Path.GetExtension(entry.NameLower ?? string.Empty);
+            if ((entry.File == null) && !string.IsNullOrWhiteSpace(entry.Path) && File.Exists(entry.Path))
+            {
+                try
+                {
+                    var data = ExtractEntryData(entry);
+                    switch (extension)
+                    {
+                        case ".ydr":
+                            return RpfFile.GetFile<YdrFile>(entry, data);
+                        case ".ydd":
+                            return RpfFile.GetFile<YddFile>(entry, data);
+                        case ".yft":
+                            return RpfFile.GetFile<YftFile>(entry, data);
+                        default:
+                            return null;
+                    }
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
             switch (extension)
             {
                 case ".ydr":
@@ -2035,6 +3102,11 @@ namespace CodeWalker.Tools
 
             if (ytd == null)
             {
+                ytd = LoadLocalYtd(textureDictHash);
+            }
+
+            if (ytd == null)
+            {
                 missingYtdHashes?.Add(textureDictHash);
                 return null;
             }
@@ -2049,6 +3121,26 @@ namespace CodeWalker.Tools
             return ytd;
         }
 
+        private YtdFile LoadLocalYtd(uint textureDictHash)
+        {
+            var ytdPath = FindLocalFileByHash(textureDictHash, ".ytd");
+            if (string.IsNullOrWhiteSpace(ytdPath) || !File.Exists(ytdPath))
+            {
+                return null;
+            }
+
+            try
+            {
+                var entry = CreateLocalFileEntry(ytdPath);
+                var data = ExtractEntryData(entry);
+                return RpfFile.GetFile<YtdFile>(entry, data);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private bool EnsureYtdLoaded(GameFileCache fileCache, YtdFile ytd)
         {
             if (ytd == null)
@@ -2058,7 +3150,21 @@ namespace CodeWalker.Tools
 
             if (!ytd.Loaded)
             {
-                fileCache.LoadFile(ytd);
+                if ((ytd.RpfFileEntry?.File == null) && File.Exists(ytd.RpfFileEntry?.Path ?? string.Empty))
+                {
+                    try
+                    {
+                        var data = ExtractEntryData(ytd.RpfFileEntry);
+                        ytd.Load(data, ytd.RpfFileEntry);
+                    }
+                    catch
+                    {
+                    }
+                }
+                else
+                {
+                    fileCache.LoadFile(ytd);
+                }
             }
 
             int tries = 0;
